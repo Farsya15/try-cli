@@ -1,0 +1,33 @@
+# Compiled binaries
+try
+*.o
+*.out
+*.exe
+
+# Object files directory
+obj/
+*.obj
+
+# Debug symbols
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test artifacts
+test_env/
+test_tries/
+tui_output.txt
+valgrind-*.log
+
+# Core dumps
+core
+core.*
