@@ -1,5 +1,7 @@
+# Build output
+dist/
+
 # Compiled binaries
-try
 *.o
 *.out
 *.exe
@@ -31,3 +33,6 @@ valgrind-*.log
 # Core dumps
 core
 core.*
+
+# Nix
+result

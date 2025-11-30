@@ -25,25 +25,82 @@ void emit_task(const char *type, const char *arg1, const char *arg2) {
   }
 }
 
-void cmd_init(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-  // Simplified init script emission
-  const char *script = "try() {\n"
-                       "  if [ \"$1\" = \"init\" ]; then\n"
-                       "    /usr/local/bin/try \"$@\"\n"
-                       "    return\n"
-                       "  fi\n"
-                       "  tmp=$(mktemp)\n"
-                       "  /usr/local/bin/try \"$@\" > \"$tmp\"\n"
-                       "  ret=$?\n"
-                       "  if [ $ret -eq 0 ]; then\n"
-                       "    . \"$tmp\"\n"
-                       "  fi\n"
-                       "  rm -f \"$tmp\"\n"
-                       "  return $ret\n"
-                       "}\n";
-  printf("%s", script);
+void cmd_init(int argc, char **argv, const char *tries_path) {
+  (void)argc;  // Unused
+  (void)argv;  // Unused
+
+  // Determine if we're in fish shell
+  const char *shell = getenv("SHELL");
+  bool is_fish = (shell && strstr(shell, "fish") != NULL);
+
+  // Override tries_path if provided as argument
+  const char *path_arg = "";
+  if (tries_path && strlen(tries_path) > 0) {
+    static char path_buf[1024];
+    snprintf(path_buf, sizeof(path_buf), " --path \"%s\"", tries_path);
+    path_arg = path_buf;
+  }
+
+  // Get the path to this executable
+  char self_path[1024];
+  ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+  if (len == -1) {
+    // Fallback to argv[0] or a default
+    strncpy(self_path, "try", sizeof(self_path) - 1);
+  } else {
+    self_path[len] = '\0';
+  }
+
+  if (is_fish) {
+    // Fish shell version
+    printf(
+      "function try\n"
+      "  set -l script_path \"%s\"\n"
+      "  # Check if first argument is a known command\n"
+      "  switch $argv[1]\n"
+      "    case clone worktree init\n"
+      "      set -l cmd (/usr/bin/env \"$script_path\"%s $argv 2>/dev/tty | string collect)\n"
+      "    case '*'\n"
+      "      set -l cmd (/usr/bin/env \"$script_path\" cd%s $argv 2>/dev/tty | string collect)\n"
+      "  end\n"
+      "  set -l rc $status\n"
+      "  if test $rc -eq 0\n"
+      "    if string match -r ' && ' -- $cmd\n"
+      "      eval $cmd\n"
+      "    else\n"
+      "      printf '%%s' $cmd\n"
+      "    end\n"
+      "  else\n"
+      "    printf '%%s' $cmd\n"
+      "  end\n"
+      "end\n",
+      self_path, path_arg, path_arg);
+  } else {
+    // Bash/Zsh version
+    printf(
+      "try() {\n"
+      "  script_path='%s'\n"
+      "  # Check if first argument is a known command\n"
+      "  case \"$1\" in\n"
+      "    clone|worktree|init)\n"
+      "      cmd=$(/usr/bin/env \"$script_path\"%s \"$@\" 2>/dev/tty)\n"
+      "      ;;\n"
+      "    *)\n"
+      "      cmd=$(/usr/bin/env \"$script_path\" cd%s \"$@\" 2>/dev/tty)\n"
+      "      ;;\n"
+      "  esac\n"
+      "  rc=$?\n"
+      "  if [ $rc -eq 0 ]; then\n"
+      "    case \"$cmd\" in\n"
+      "      *\" && \"*) eval \"$cmd\" ;;\n"
+      "      *) printf '%%s' \"$cmd\" ;;\n"
+      "    esac\n"
+      "  else\n"
+      "    printf '%%s' \"$cmd\"\n"
+      "  fi\n"
+      "}\n",
+      self_path, path_arg, path_arg);
+  }
 }
 
 void cmd_clone(int argc, char **argv, const char *tries_path) {

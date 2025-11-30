@@ -22,9 +22,21 @@
 static inline void cleanup_free(void *p) { free(*(void **)p); }
 #define AUTO_FREE Z_CLEANUP(cleanup_free)
 
+// Global flag to disable token expansion (for testing)
+extern bool zstr_disable_token_expansion;
+
+// Result of token expansion with optional cursor position
+typedef struct {
+  zstr expanded;
+  int cursor_pos; // -1 if no cursor marker found, otherwise visual column (1-indexed)
+} TokenExpansion;
+
 // Token expansion for UI
 // Returns a zstr that must be freed (or use Z_CLEANUP(zstr_free))
 zstr zstr_expand_tokens(const char *text);
+
+// Token expansion with cursor tracking
+TokenExpansion zstr_expand_tokens_with_cursor(const char *text);
 
 // String helpers
 char *trim(char *str); // Operates in-place

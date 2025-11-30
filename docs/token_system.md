@@ -20,9 +20,9 @@ Tokens are placeholder strings enclosed in curly braces: `{token_name}`
 
 | Token | ANSI Code | Description | Usage |
 |-------|-----------|-------------|-------|
-| `{b}` | `\033[1;33m` | Bold + Yellow | Highlighted text, fuzzy match characters |
-| `{/b}` | `\033[22m` | Reset bold only | End bold formatting while preserving color |
-| `{dim}` | `\033[2m` | Dim text | Secondary/de-emphasized text |
+| `{b}` | `\033[1m\033[33m` | Bold + Yellow | Highlighted text, fuzzy match characters |
+| `{/b}` | `\033[22m\033[39m` | Reset bold and foreground | End bold formatting and reset color |
+| `{dim}` | `\033[90m` | Bright black (gray) | Secondary/de-emphasized text |
 | `{text}` | `\033[0m` | Full reset | Normal text (complete reset) |
 | `{reset}` | `\033[0m` | Full reset | Complete reset of all formatting |
 | `{/fg}` | `\033[39m` | Reset foreground | Reset foreground color to default |
@@ -71,7 +71,7 @@ The following ANSI escape sequences are defined as constants:
 "Status: {b}OK{/b} - {dim}completed{/fg}"
 
 // After expansion
-"Status: \033[1;33mOK\033[22m - \033[2mcompleted\033[39m"
+"Status: \033[1m\033[33mOK\033[22m\033[39m - \033[90mcompleted\033[39m"
 ```
 
 ## Usage Patterns

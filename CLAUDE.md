@@ -27,7 +27,7 @@ Install to `/usr/local/bin/try`:
 make install
 ```
 
-The binary is named `try` and built from C source files in `src/`.
+The binary is built to `dist/try` from C source files in `src/`. Object files are placed in `obj/`.
 
 ## Architecture
 
@@ -61,6 +61,7 @@ Commands are emitted via `emit_task()` in `src/commands.c`, which prints shell s
 - `calculate_score()`: Combines fuzzy match score with recency (mtime)
 - `highlight_matches()`: Inserts `{b}` tokens around matched characters
 - Algorithm favors consecutive character matches and recent access times
+- **Documentation**: See `docs/fuzzy_matching.md` for complete algorithm specification
 
 **Terminal Management** (`src/terminal.c`, `src/terminal.h`):
 - Raw mode terminal control (disables canonical mode, echo)
@@ -109,6 +110,8 @@ Manual cleanup still required in some cases:
 
 The UI uses a token-based formatting system for dynamic styling. Tokens are placeholder strings embedded in text that get expanded to ANSI escape codes via `zstr_expand_tokens()` in `src/utils.c`. This allows formatting to be defined declaratively without hardcoding ANSI sequences throughout the codebase.
 
+**Documentation**: See `docs/token_system.md` for complete token specifications and usage patterns.
+
 **Available Tokens:**
 
 | Token | ANSI Code | Description |
@@ -116,8 +119,8 @@ The UI uses a token-based formatting system for dynamic styling. Tokens are plac
 | `{h1}` | Bold + Orange (38;5;214m) | Primary headings |
 | `{h2}` | Bold + Blue | Secondary headings |
 | `{b}` | Bold + Yellow | Bold/highlighted text, fuzzy matches |
-| `{/b}` | Reset bold only | End bold formatting |
-| `{dim}` | Dim | Dimmed/secondary text |
+| `{/b}` | Reset bold and foreground | End bold formatting and reset color |
+| `{dim}` | Bright black (gray, 90m) | Dimmed/secondary text |
 | `{text}` | Reset | Normal text (full reset) |
 | `{reset}` | Reset | Full reset of all formatting |
 | `{/fg}` | Reset foreground | Reset foreground color only |
@@ -156,14 +159,14 @@ The tries path can be overridden with `--path` or `--path=` flag.
 
 ## Testing Workflow
 
-No automated tests currently exist. Manual testing approach:
+Automated tests are available via `make test`. Manual testing approach:
 
 1. Build with `make`
-2. Run `./try init` to get shell function definition
+2. Run `./dist/try init` to get shell function definition
 3. Source the output or manually test commands
-4. Test interactive selector: `./try cd`
-5. Test with filter: `./try cd <query>`
-6. Test cloning: `./try clone <url> [name]`
+4. Test interactive selector: `./dist/try cd`
+5. Test with filter: `./dist/try cd <query>`
+6. Test cloning: `./dist/try clone <url> [name]`
 
 Reference the Ruby implementation in `docs/try.reference.rb` for expected behavior.
 
@@ -224,8 +227,9 @@ The `libs/` directory contains bundled single-header libraries (zstr, zvec, zlis
 - `src/` - C source and header files
 - `libs/` - Bundled single-header libraries (z-libs)
 - `docs/` - Reference implementation and documentation
-- `obj/` - Build artifacts (created by make)
-- `try` - Output binary
+- `obj/` - Object files (created by make, gitignored)
+- `dist/` - Build output directory (created by make, gitignored)
+- `dist/try` - Output binary
 
 ## Key Files
 
@@ -236,3 +240,18 @@ The `libs/` directory contains bundled single-header libraries (zstr, zvec, zlis
 - `src/commands.c` - Command implementations, shell emission
 - `Makefile` - Build configuration
 - `docs/try.reference.rb` - Ruby reference implementation (source of truth for features)
+
+## Documentation Maintenance
+
+**IMPORTANT**: When making changes to certain subsystems, their corresponding documentation files must be updated:
+
+- **Token expansion** (`src/utils.c`, `zstr_expand_tokens()`):
+  - Update `docs/token_system.md` with any new tokens or changed ANSI codes
+  - Update the token table in this file (CLAUDE.md)
+
+- **Fuzzy matching algorithm** (`src/fuzzy.c`, `fuzzy_match()`):
+  - Update `docs/fuzzy_matching.md` with algorithm changes
+  - Update scoring examples if formulas change
+  - Document any new bonuses, multipliers, or scoring components
+
+These documentation files serve as specifications and must remain synchronized with the implementation.

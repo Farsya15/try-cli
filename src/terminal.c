@@ -181,10 +181,17 @@ int get_window_size(int *rows, int *cols) {
 
 void clear_screen() {
   // Clear screen and home cursor
-  write(STDERR_FILENO, "\x1b[2J", 4);
-  write(STDERR_FILENO, "\x1b[H", 3);
+  ssize_t unused1 = write(STDERR_FILENO, "\x1b[2J", 4);
+  ssize_t unused2 = write(STDERR_FILENO, "\x1b[H", 3);
+  (void)unused1; (void)unused2;
 }
 
-void hide_cursor() { write(STDERR_FILENO, "\x1b[?25l", 6); }
+void hide_cursor() {
+  ssize_t unused = write(STDERR_FILENO, "\x1b[?25l", 6);
+  (void)unused;
+}
 
-void show_cursor() { write(STDERR_FILENO, "\x1b[?25h", 6); }
+void show_cursor() {
+  ssize_t unused = write(STDERR_FILENO, "\x1b[?25h", 6);
+  (void)unused;
+}

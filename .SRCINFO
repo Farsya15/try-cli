@@ -1,0 +1,13 @@
+pkgbase = try-c
+	pkgdesc = A fast, interactive CLI tool for managing ephemeral development workspaces
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/tobi/try-c
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = gcc
+	makedepends = make
+	depends = glibc
+
+pkgname = try-c

@@ -14,6 +14,9 @@
 #include <time.h>
 #include <unistd.h>
 
+// Helper macro to ignore write return values
+#define WRITE(fd, buf, len) do { ssize_t unused = write(fd, buf, len); (void)unused; } while(0)
+
 // Generate vector implementation for TryEntry
 Z_VEC_GENERATE_IMPL(TryEntry, TryEntry)
 
@@ -120,12 +123,46 @@ static void filter_tries() {
   }
 }
 
+// Parse key from test mode injected keys (handles escape sequences)
+static int read_test_key(TestMode *test_mode) {
+  if (test_mode->inject_keys[test_mode->key_index] == '\0') {
+    return -1; // End of keys
+  }
+
+  unsigned char c = test_mode->inject_keys[test_mode->key_index++];
+
+  if (c == '\x1b') {
+    // Check for escape sequence
+    if (test_mode->inject_keys[test_mode->key_index] == '[') {
+      test_mode->key_index++;
+      unsigned char seq = test_mode->inject_keys[test_mode->key_index++];
+      switch (seq) {
+      case 'A':
+        return ARROW_UP;
+      case 'B':
+        return ARROW_DOWN;
+      case 'C':
+        return ARROW_RIGHT;
+      case 'D':
+        return ARROW_LEFT;
+      default:
+        return ESC_KEY;
+      }
+    }
+    return ESC_KEY;
+  } else if (c == '\r') {
+    return ENTER_KEY;
+  } else {
+    return c;
+  }
+}
+
 static void render(const char *base_path) {
   int rows, cols;
   get_window_size(&rows, &cols);
 
-  write(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
-  write(STDERR_FILENO, "\x1b[H", 3);    // Home
+  WRITE(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
+  WRITE(STDERR_FILENO, "\x1b[H", 3);    // Home
 
   char sep_line[512] = {0};
   for (int i = 0; i < cols && i < 300; i++)
@@ -141,20 +178,24 @@ static void render(const char *base_path) {
     zstr_cat(&header_fmt, "{reset}\x1b[K\r\n");
 
     Z_CLEANUP(zstr_free) zstr header = zstr_expand_tokens(zstr_cstr(&header_fmt));
-    write(STDERR_FILENO, zstr_cstr(&header), zstr_len(&header));
+    WRITE(STDERR_FILENO, zstr_cstr(&header), zstr_len(&header));
   }
 
-  // Search bar
+  // Search bar - track cursor position
+  int search_cursor_col = -1;
+  int search_line = 3;
   {
     Z_CLEANUP(zstr_free)
     zstr search_fmt = zstr_from("{b}Search:{/b} ");
     zstr_cat(&search_fmt, zstr_cstr(&filter_buffer));
-    zstr_cat(&search_fmt, "\x1b[K\r\n{dim}");
+    zstr_cat(&search_fmt, "{cursor}\x1b[K\r\n{dim}");
     zstr_cat(&search_fmt, sep_line);
     zstr_cat(&search_fmt, "{reset}\x1b[K\r\n");
 
-    Z_CLEANUP(zstr_free) zstr search = zstr_expand_tokens(zstr_cstr(&search_fmt));
-    write(STDERR_FILENO, zstr_cstr(&search), zstr_len(&search));
+    TokenExpansion search_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&search_fmt));
+    search_cursor_col = search_exp.cursor_pos;
+    WRITE(STDERR_FILENO, zstr_cstr(&search_exp.expanded), zstr_len(&search_exp.expanded));
+    zstr_free(&search_exp.expanded);
   }
 
   // List
@@ -174,60 +215,140 @@ static void render(const char *base_path) {
       TryEntry *entry = filtered_ptrs.data[idx];
       int is_selected = (idx == selected_index);
 
-      Z_CLEANUP(zstr_free) zstr rel_time = format_relative_time(entry->mtime);
-
-      // Calculate padding
-      // Note: This is approximate as rendered string has escape codes
-      // Ideally we'd strip codes to get length, but for now use name length
-      int plain_len = zstr_len(&entry->name);
-      int meta_len = zstr_len(&rel_time) + 10; // + score digits
-      int padding_len = cols - 5 - plain_len - meta_len;
-      if (padding_len < 1)
-        padding_len = 1;
-
-      char padding[256];
-      memset(padding, ' ', padding_len < 255 ? padding_len : 255);
-      padding[padding_len < 255 ? padding_len : 255] = '\0';
-
       Z_CLEANUP(zstr_free) zstr line = zstr_init();
 
+      // Calculate available space
+      // Prefix is 2 chars ("→ " or "  "), icon is 2 chars (emoji), space after icon is implicit in count
+      int prefix_len = 5; // 2 (arrow/spaces) + 2 (emoji) + 1 (space)
+
+      // Calculate metadata length (for later use)
+      Z_CLEANUP(zstr_free) zstr rel_time = format_relative_time(entry->mtime);
+      char score_text[16];
+      snprintf(score_text, sizeof(score_text), ", %.1f", entry->score);
+      int meta_len = zstr_len(&rel_time) + strlen(score_text);
+
+      // Calculate max length for directory name - allow it to use almost full width
+      // Don't reserve space for metadata here; we'll check if it fits after
+      int max_name_len = cols - prefix_len - 1; // Just leave 1 char for safety
+
+      int plain_len = zstr_len(&entry->name);
+      bool name_truncated = false;
+
+      Z_CLEANUP(zstr_free) zstr display_name = zstr_init();
+      if (plain_len > max_name_len && max_name_len > 4) {
+        // Truncate and add ellipsis
+        // Copy the rendered name but truncate it
+        const char *rendered = zstr_cstr(&entry->rendered);
+        // This is approximate since rendered has tokens, but good enough
+        int chars_to_copy = max_name_len - 1; // Leave room for ellipsis
+
+        // Copy character by character, skipping tokens
+        int visible_count = 0;
+        const char *p = rendered;
+        while (*p && visible_count < chars_to_copy) {
+          if (*p == '{') {
+            // Copy token
+            zstr_push(&display_name, *p++);
+            while (*p && *p != '}') {
+              zstr_push(&display_name, *p++);
+            }
+            if (*p == '}') {
+              zstr_push(&display_name, *p++);
+            }
+          } else {
+            zstr_push(&display_name, *p++);
+            visible_count++;
+          }
+        }
+        zstr_cat(&display_name, "…");
+        name_truncated = true;
+      } else {
+        zstr_cat(&display_name, zstr_cstr(&entry->rendered));
+      }
+
+      // Render the directory entry
       if (is_selected) {
         zstr_cat(&line, "{b}→ {/b}📁 {section}");
-        zstr_cat(&line, zstr_cstr(&entry->rendered));
+        zstr_cat(&line, zstr_cstr(&display_name));
         zstr_cat(&line, "{/section}");
       } else {
         zstr_cat(&line, "  📁 ");
-        zstr_cat(&line, zstr_cstr(&entry->rendered));
+        zstr_cat(&line, zstr_cstr(&display_name));
       }
 
-      zstr_cat(&line, padding);
-      zstr_cat(&line, "{dim}");
-      zstr_cat(&line, zstr_cstr(&rel_time));
-      zstr_fmt(&line, ", %.1f", entry->score);
-      zstr_cat(&line, "{reset}\x1b[K\r\n");
+      // Calculate positions for right-aligned metadata
+      int actual_name_len = name_truncated ? max_name_len : plain_len;
+      int path_end_pos = prefix_len + actual_name_len;
+      int meta_start_pos = cols - meta_len - 1; // -1 to avoid wrapping at edge
+
+      // Only show metadata if there's room without overlap (at least 1 space gap)
+      if (!name_truncated && path_end_pos + 1 < meta_start_pos) {
+        int padding_len = meta_start_pos - path_end_pos;
+
+        char padding[256];
+        int safe_padding = padding_len < 255 ? padding_len : 255;
+        memset(padding, ' ', safe_padding);
+        padding[safe_padding] = '\0';
+
+        zstr_cat(&line, padding);
+        zstr_cat(&line, "{dim}");
+        zstr_cat(&line, zstr_cstr(&rel_time));
+        zstr_cat(&line, score_text);
+        zstr_cat(&line, "{reset}");
+      }
+
+      zstr_cat(&line, "\x1b[K\r\n");
 
       Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-      write(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+      WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
 
     } else if (idx == (int)filtered_ptrs.length && zstr_len(&filter_buffer) > 0) {
+      // Add separator line before "Create new"
+      WRITE(STDERR_FILENO, "\x1b[K\r\n", 5);
+      i++; // Skip next iteration since we used a line for separator
+
+      // Generate preview of what the directory name will be
+      time_t now = time(NULL);
+      struct tm *t = localtime(&now);
+      char date_prefix[20];
+      strftime(date_prefix, sizeof(date_prefix), "%Y-%m-%d", t);
+
+      Z_CLEANUP(zstr_free) zstr preview = zstr_from(date_prefix);
+      zstr_cat(&preview, "-");
+
+      // Add filter text with spaces replaced by dashes
+      const char *filter_text = zstr_cstr(&filter_buffer);
+      for (size_t i = 0; i < zstr_len(&filter_buffer); i++) {
+        if (isspace(filter_text[i])) {
+          zstr_push(&preview, '-');
+        } else {
+          zstr_push(&preview, filter_text[i]);
+        }
+      }
+
       if (idx == selected_index) {
         Z_CLEANUP(zstr_free)
-        zstr line = zstr_from("{b}→ {/b}+ Create new: ");
-        zstr_cat(&line, zstr_cstr(&filter_buffer));
-        zstr_cat(&line, "\x1b[K\r\n");
+        zstr line = zstr_from("{b}→ {/b}📂 Create new: {dim}");
+        zstr_cat(&line, zstr_cstr(&preview));
+        zstr_cat(&line, "{reset}\x1b[K\r\n");
 
         Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-        write(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+        WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
       } else {
-        fprintf(stderr, "  + Create new: %s\x1b[K\r\n",
-                zstr_cstr(&filter_buffer));
+        Z_CLEANUP(zstr_free)
+        zstr line = zstr_from("  📂 Create new: {dim}");
+        zstr_cat(&line, zstr_cstr(&preview));
+        zstr_cat(&line, "{reset}\x1b[K\r\n");
+
+        Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
+        WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
       }
     } else {
-      write(STDERR_FILENO, "\x1b[K\r\n", 5);
+      WRITE(STDERR_FILENO, "\x1b[K\r\n", 5);
     }
   }
 
-  write(STDERR_FILENO, "\x1b[J", 3); // Clear rest
+  WRITE(STDERR_FILENO, "\x1b[J", 3); // Clear rest
 
   // Footer
   {
@@ -237,8 +358,16 @@ static void render(const char *base_path) {
                           "Select  ESC: Cancel{reset}\x1b[K\r\n");
 
     Z_CLEANUP(zstr_free) zstr footer = zstr_expand_tokens(zstr_cstr(&footer_fmt));
-    write(STDERR_FILENO, zstr_cstr(&footer), zstr_len(&footer));
+    WRITE(STDERR_FILENO, zstr_cstr(&footer), zstr_len(&footer));
   }
+
+  // Position cursor in search field and show it
+  if (search_cursor_col >= 0) {
+    char cursor_pos[32];
+    snprintf(cursor_pos, sizeof(cursor_pos), "\x1b[%d;%dH", search_line, search_cursor_col);
+    WRITE(STDERR_FILENO, cursor_pos, strlen(cursor_pos));
+  }
+  WRITE(STDERR_FILENO, "\x1b[?25h", 6); // Show cursor
 
   (void)base_path;
 }
@@ -291,11 +420,7 @@ SelectionResult run_selector(const char *base_path,
     // Read key from injected keys or real input
     int c;
     if (test_mode && test_mode->inject_keys) {
-      if (test_mode->inject_keys[test_mode->key_index] == '\0') {
-        // No more keys, exit
-        break;
-      }
-      c = test_mode->inject_keys[test_mode->key_index++];
+      c = read_test_key(test_mode);
     } else {
       c = read_key();
     }
@@ -356,8 +481,9 @@ SelectionResult run_selector(const char *base_path,
   }
 
   if (!test_mode || !test_mode->inject_keys) {
+    // Clear the screen before exiting
+    WRITE(STDERR_FILENO, "\x1b[2J\x1b[H", 7); // Clear screen and move cursor to home
     disable_raw_mode();
-    fprintf(stderr, "\n");
   }
 
   clear_state();

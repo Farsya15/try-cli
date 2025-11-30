@@ -31,22 +31,33 @@ Perform sequential matching of query characters against the directory name:
 
 - **Character match**: +1.0 point per matched character
 - **Word boundary bonus**: +1.0 if match occurs at word start (position 0 or after non-alphanumeric character)
-- **Proximity bonus**: +1.0 / √(gap + 1) where gap is characters between consecutive matches
+- **Proximity bonus**: +2.0 / √(gap + 1) where gap is characters between consecutive matches
+  - Consecutive matches (gap=0): +2.0
+  - Gap of 1: +1.41
+  - Gap of 5: +0.82
 
 ### 4. Score Multipliers
 
-- **Density multiplier**: score × (query_length / last_match_position + 1)
+**Important**: These multipliers are applied **only to the fuzzy match score** (character matches + bonuses), not to contextual bonuses. This ensures that adding a query doesn't crush the base score.
+
+- **Density multiplier**: fuzzy_score × (query_length / last_match_position + 1)
   - Rewards matches concentrated toward the beginning of the string
-- **Length penalty**: score × (10 / string_length + 10)
+- **Length penalty**: fuzzy_score × (10 / string_length + 10)
   - Penalizes longer directory names to favor concise matches
 
 ### 5. Contextual Bonuses
 
+**Important**: These bonuses are added **after** multipliers are applied, so they maintain their full value.
+
 - **Date prefix bonus**: +2.0 if directory name starts with `YYYY-MM-DD-` pattern
-- **Recency bonus**:
-  - +0.5 if accessed within last hour
-  - +0.3 if accessed within last day
-  - +0.1 if accessed within last week
+- **Recency bonus**: +3.0 / √(hours_since_access + 1)
+  - Provides smooth decay favoring recently accessed directories
+  - Just accessed: +3.0
+  - 1 hour ago: +2.1
+  - 24 hours ago: +0.6
+  - 1 week ago: +0.2
+
+**Final score calculation**: `final_score = (fuzzy_score × density × length) + date_bonus + recency_bonus`
 
 ## Highlighting
 
@@ -58,30 +69,43 @@ These tokens are expanded to ANSI escape codes for terminal display.
 
 ## Scoring Examples
 
-### Example 1: Perfect consecutive match
+### Example 1: Perfect consecutive match (recent access)
 - Directory: `2025-11-29-project`
 - Query: `pro`
+- Last accessed: 1 hour ago
 - Matches: positions 11-12-13 (`p` `r` `o`)
 - Score components:
-  - Base: 3 × 1.0 = 3.0
-  - Word boundary: +1.0 (at start of "project")
-  - Proximity: +1.0/√1 + 1.0/√1 = 2.0
-  - Density: × (3/14) ≈ ×0.214
-  - Length: × (10/25) = ×0.4
-  - Date bonus: +2.0
-  - Total: ≈4.8
+  - **Fuzzy score calculation:**
+    - Base: 3 × 1.0 = 3.0
+    - Word boundary: +1.0 (at start of "project")
+    - Proximity: +2.0/√1 + 2.0/√1 = 4.0 (consecutive matches)
+    - Subtotal: 8.0
+    - Density: × (3/14) ≈ ×0.214
+    - Length: × (10/19) ≈ ×0.526
+    - After multipliers: 8.0 × 0.214 × 0.526 ≈ 0.90
+  - **Contextual bonuses (added after multipliers):**
+    - Date bonus: +2.0
+    - Recency: +3.0/√2 ≈ +2.1
+  - **Final score**: 0.90 + 2.0 + 2.1 ≈ **5.0**
 
-### Example 2: Scattered match
+### Example 2: Scattered match (no date prefix, older)
 - Directory: `my-old-project`
 - Query: `pro`
+- Last accessed: 24 hours ago
 - Matches: positions 7-8-10 (`p` `r` `o`)
 - Score components:
-  - Base: 3 × 1.0 = 3.0
-  - Word boundary: +1.0
-  - Proximity: +1.0/√1 + 1.0/√2 ≈ 1.7
-  - Density: × (3/11) ≈ ×0.273
-  - Length: × (10/15) ≈ ×0.667
-  - Total: ≈3.8
+  - **Fuzzy score calculation:**
+    - Base: 3 × 1.0 = 3.0
+    - Word boundary: +1.0
+    - Proximity: +2.0/√1 + 2.0/√2 ≈ 3.4
+    - Subtotal: 7.4
+    - Density: × (3/11) ≈ ×0.273
+    - Length: × (10/24) ≈ ×0.417
+    - After multipliers: 7.4 × 0.273 × 0.417 ≈ 0.84
+  - **Contextual bonuses (added after multipliers):**
+    - Date bonus: +0.0 (no date prefix)
+    - Recency: +3.0/√25 = +0.6
+  - **Final score**: 0.84 + 0.0 + 0.6 ≈ **1.4**
 
 ## Design Principles
 
@@ -105,41 +129,45 @@ function process_entries(query: optional string, entries: list of {name, path, m
     result = []
 
     for entry in entries:
-        score = 0.0
         tokenized = ""
-
         has_date_prefix = entry.name matches "^\d{4}-\d{2}-\d{2}-"
+
+        # Calculate date bonus (applied after multipliers)
+        date_bonus = 0.0
         if has_date_prefix:
-            score += 2.0
-            tokenized += "{dim}" + entry.name[0:11] + "{/fg}"
-            remaining_text = entry.name[11:]
-        else:
-            remaining_text = entry.name
+            date_bonus = 2.0
 
         if query == null or query == "":
-            tokenized += remaining_text
-            score += calculate_recency_bonus(entry.mtime)
+            # No query - just render and score by recency
+            if has_date_prefix:
+                tokenized += "{dim}" + entry.name[0:11] + "{/fg}" + entry.name[11:]
+            else:
+                tokenized += entry.name
+
+            score = date_bonus + calculate_recency_bonus(entry.mtime)
             result.append({path: entry.path, score: score, tokenized_string: tokenized})
             continue
 
-        text_lower = remaining_text.to_lower()
+        # Fuzzy matching with query
+        text_lower = entry.name.to_lower()
         query_lower = query.to_lower()
 
+        fuzzy_score = 0.0
         query_idx = 0
         last_match_pos = -1
         current_pos = 0
 
-        for i in 0..remaining_text.length-1:
-            char = remaining_text[i]
+        for i in 0..entry.name.length-1:
+            char = entry.name[i]
             if query_idx < query.length and char.to_lower() == query_lower[query_idx]:
-                score += 1.0
+                fuzzy_score += 1.0
 
-                if current_pos == 0 or not remaining_text[current_pos-1].is_alphanumeric():
-                    score += 1.0
+                if current_pos == 0 or not entry.name[current_pos-1].is_alphanumeric():
+                    fuzzy_score += 1.0
 
                 if last_match_pos >= 0:
                     gap = current_pos - last_match_pos - 1
-                    score += 1.0 / sqrt(gap + 1)
+                    fuzzy_score += 2.0 / sqrt(gap + 1)
 
                 last_match_pos = current_pos
                 query_idx += 1
@@ -151,30 +179,25 @@ function process_entries(query: optional string, entries: list of {name, path, m
             current_pos += 1
 
         if query_idx < query.length:
+            # Partial match - skip this entry
             continue
 
+        # Apply multipliers only to fuzzy score
         if last_match_pos >= 0:
-            score *= query.length / (last_match_pos + 1)
+            fuzzy_score *= query.length / (last_match_pos + 1)
 
-        score *= 10.0 / (entry.name.length + 10.0)
+        fuzzy_score *= 10.0 / (entry.name.length + 10.0)
 
-        score += calculate_recency_bonus(entry.mtime)
+        # Add contextual bonuses after multipliers
+        final_score = fuzzy_score + date_bonus + calculate_recency_bonus(entry.mtime)
 
-        result.append({path: entry.path, score: score, tokenized_string: tokenized})
+        result.append({path: entry.path, score: final_score, tokenized_string: tokenized})
 
     return result
 
 function calculate_recency_bonus(mtime)
     now = current_time()
-    age_hours = (now - mtime) / 3600
-
-    if age_hours < 1:
-        return 0.5
-    else if age_hours < 24:
-        return 0.3
-    else if age_hours < 168:
-        return 0.1
-    else:
-        return 0.0
+    hours_since_access = (now - mtime) / 3600
+    return 3.0 / sqrt(hours_since_access + 1)
 ```</content>
 <parameter name="filePath">docs/fuzzy_matching.md

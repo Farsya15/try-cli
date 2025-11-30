@@ -24,16 +24,23 @@ void fuzzy_match(TryEntry *entry, const char *query) {
 
   const char *text = zstr_cstr(&entry->name);
 
-  // 1. Date prefix bonus
-  if (has_date_prefix(text)) {
-    entry->score += 2.0;
-  }
-
-  // 2. If no query, just render plain text
+  // 2. If no query, just render with dimmed date prefix
   if (!query || !*query) {
-    zstr_cat(&entry->rendered, text);
-    // Time-based scoring still applies
-    goto time_score;
+    // Check for date prefix and render with dimming
+    if (has_date_prefix(text)) {
+      // Render date prefix (YYYY-MM-DD-) with {dim}, including the trailing dash
+      zstr_cat(&entry->rendered, "{dim}");
+      zstr_cat_len(&entry->rendered, text, 11); // Date + dash is 11 chars
+      zstr_cat(&entry->rendered, "{/fg}");
+      zstr_cat(&entry->rendered, text + 11); // Rest after dash
+    } else {
+      zstr_cat(&entry->rendered, text);
+    }
+    // Time-based scoring (matches Ruby reference)
+    time_t now = time(NULL);
+    double hours_since_access = difftime(now, entry->mtime) / 3600.0;
+    entry->score += 3.0 / sqrt(hours_since_access + 1);
+    return;
   }
 
   // 3. Fuzzy match with highlighting
@@ -57,21 +64,32 @@ void fuzzy_match(TryEntry *entry, const char *query) {
   int query_idx = 0;
   int last_pos = -1;
   int current_pos = 0;
+  bool has_date = has_date_prefix(text);
+  bool in_date_section = false;
+
+  // Track fuzzy match score separately
+  float fuzzy_score = 0.0;
 
   while (*t_ptr) {
+    // Handle date prefix dimming (including the trailing dash at position 10)
+    if (has_date && current_pos == 0) {
+      zstr_cat(&entry->rendered, "{dim}");
+      in_date_section = true;
+    }
+
     if (query_idx < query_len && *t_ptr == q_ptr[query_idx]) {
       // Match found!
-      entry->score += 1.0;
+      fuzzy_score += 1.0;
 
       // Word boundary bonus
       if (current_pos == 0 || !isalnum(*(t_ptr - 1))) {
-        entry->score += 1.0;
+        fuzzy_score += 1.0;
       }
 
-      // Proximity bonus
+      // Proximity bonus (bumped to favor consecutive matches)
       if (last_pos >= 0) {
         int gap = current_pos - last_pos - 1;
-        entry->score += 1.0 / sqrt(gap + 1);
+        fuzzy_score += 2.0 / sqrt(gap + 1);
       }
 
       last_pos = current_pos;
@@ -85,6 +103,13 @@ void fuzzy_match(TryEntry *entry, const char *query) {
       // No match, append regular char
       zstr_push(&entry->rendered, *orig_ptr);
     }
+
+    // Close dim section after the trailing dash (position 10)
+    if (has_date && current_pos == 10 && in_date_section) {
+      zstr_cat(&entry->rendered, "{/fg}");
+      in_date_section = false;
+    }
+
     t_ptr++;
     orig_ptr++;
     current_pos++;
@@ -97,27 +122,31 @@ void fuzzy_match(TryEntry *entry, const char *query) {
     return;
   }
 
+  // Apply multipliers only to fuzzy match score
   // Density bonus
   if (last_pos >= 0) {
-    entry->score *= ((float)query_len / (last_pos + 1));
+    fuzzy_score *= ((float)query_len / (last_pos + 1));
   }
 
   // Length penalty
   int text_len = zstr_len(&entry->name);
-  entry->score *= (10.0 / (text_len + 10.0));
+  fuzzy_score *= (10.0 / (text_len + 10.0));
 
-time_score:
-  // Time-based scoring
-  {
-    time_t now = time(NULL);
-    double age = difftime(now, entry->mtime);
-    if (age < 3600)
-      entry->score += 0.5;
-    else if (age < 86400)
-      entry->score += 0.3;
-    else if (age < 604800)
-      entry->score += 0.1;
+  // Date prefix bonus (applied after multipliers to avoid crushing)
+  float date_bonus = 0.0;
+  if (has_date_prefix(text)) {
+    date_bonus = 2.0;
   }
+
+  // Now add contextual bonuses (not affected by multipliers)
+  entry->score = fuzzy_score + date_bonus;
+
+  // Time-based scoring (matches Ruby reference implementation)
+  time_t now = time(NULL);
+
+  // Access time bonus - recently accessed is better
+  double hours_since_access = difftime(now, entry->mtime) / 3600.0;
+  entry->score += 3.0 / sqrt(hours_since_access + 1);
 }
 
 float calculate_score(const char *text, const char *query, time_t mtime) {
@@ -125,8 +154,9 @@ float calculate_score(const char *text, const char *query, time_t mtime) {
   // We create a temporary entry just for scoring
   TryEntry tmp = {0};
   tmp.name = zstr_from(text);
+  tmp.rendered = zstr_init();
+  tmp.path = zstr_init();
   tmp.mtime = mtime;
-  // rendered and path can be empty/init
 
   fuzzy_match(&tmp, query);
 
@@ -134,7 +164,7 @@ float calculate_score(const char *text, const char *query, time_t mtime) {
 
   zstr_free(&tmp.name);
   zstr_free(&tmp.rendered);
-  // path is empty, no need to free
+  zstr_free(&tmp.path);
 
   return score;
 }

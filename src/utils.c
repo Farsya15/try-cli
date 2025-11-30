@@ -11,53 +11,77 @@
 #include <time.h>
 #include <unistd.h>
 
-zstr zstr_expand_tokens(const char *text) {
-  zstr buffer = zstr_init();
+// Global flag to disable token expansion
+bool zstr_disable_token_expansion = false;
+
+TokenExpansion zstr_expand_tokens_with_cursor(const char *text) {
+  TokenExpansion result;
+  result.expanded = zstr_init();
+  result.cursor_pos = -1;
+
   const char *in = text;
+  int visual_pos = 1; // 1-indexed for terminal positioning
+
+  // If expansion is disabled, just return a copy of the text
+  if (zstr_disable_token_expansion) {
+    zstr_cat(&result.expanded, text);
+    return result;
+  }
 
   while (*in) {
     if (*in == '{') {
-      if (strncmp(in, "{h1}", 4) == 0) {
-        zstr_cat(&buffer, ANSI_BOLD);
-        zstr_cat(&buffer, "\033[38;5;214m"); // Orange
+      if (strncmp(in, "{cursor}", 8) == 0) {
+        result.cursor_pos = visual_pos;
+        in += 8;
+      } else if (strncmp(in, "{h1}", 4) == 0) {
+        zstr_cat(&result.expanded, ANSI_BOLD);
+        zstr_cat(&result.expanded, "\033[38;5;214m"); // Orange
         in += 4;
       } else if (strncmp(in, "{h2}", 4) == 0) {
-        zstr_cat(&buffer, ANSI_BOLD);
-        zstr_cat(&buffer, ANSI_BLUE);
+        zstr_cat(&result.expanded, ANSI_BOLD);
+        zstr_cat(&result.expanded, ANSI_BLUE);
         in += 4;
       } else if (strncmp(in, "{b}", 3) == 0) {
-        zstr_cat(&buffer, ANSI_BOLD);
-        zstr_cat(&buffer, ANSI_YELLOW);
+        zstr_cat(&result.expanded, ANSI_BOLD);
+        zstr_cat(&result.expanded, ANSI_YELLOW);
         in += 3;
       } else if (strncmp(in, "{/b}", 4) == 0) {
-        zstr_cat(&buffer, "\033[22m"); // Turn off bold
+        zstr_cat(&result.expanded, "\033[22m"); // Turn off bold
+        zstr_cat(&result.expanded, "\033[39m"); // Reset foreground color
         in += 4;
       } else if (strncmp(in, "{dim}", 5) == 0) {
-        zstr_cat(&buffer, ANSI_DIM);
+        zstr_cat(&result.expanded, "\033[90m"); // Bright black (gray) like Ruby version
         in += 5;
       } else if (strncmp(in, "{reset}", 7) == 0) {
-        zstr_cat(&buffer, ANSI_RESET);
+        zstr_cat(&result.expanded, ANSI_RESET);
         in += 7;
       } else if (strncmp(in, "{/fg}", 5) == 0) {
-        zstr_cat(&buffer, "\033[39m"); // Reset foreground
+        zstr_cat(&result.expanded, "\033[39m"); // Reset foreground
         in += 5;
       } else if (strncmp(in, "{text}", 6) == 0) {
-        zstr_cat(&buffer, ANSI_RESET);
+        zstr_cat(&result.expanded, ANSI_RESET);
         in += 6;
       } else if (strncmp(in, "{section}", 9) == 0) {
-        zstr_cat(&buffer, ANSI_BOLD);
+        zstr_cat(&result.expanded, ANSI_BOLD);
         in += 9;
       } else if (strncmp(in, "{/section}", 10) == 0) {
-        zstr_cat(&buffer, ANSI_RESET);
+        zstr_cat(&result.expanded, ANSI_RESET);
         in += 10;
       } else {
-        zstr_push(&buffer, *in++);
+        zstr_push(&result.expanded, *in++);
+        visual_pos++;
       }
     } else {
-      zstr_push(&buffer, *in++);
+      zstr_push(&result.expanded, *in++);
+      visual_pos++;
     }
   }
-  return buffer;
+  return result;
+}
+
+zstr zstr_expand_tokens(const char *text) {
+  TokenExpansion result = zstr_expand_tokens_with_cursor(text);
+  return result.expanded;
 }
 
 char *trim(char *str) {

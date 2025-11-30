@@ -5,14 +5,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-void print_help() {
-  printf("Usage: try [command] [args]\n");
-  printf("Commands:\n");
-  printf("  init             Initialize shell integration\n");
-  printf("  clone <url>      Clone a repo into a new try\n");
-  printf("  worktree         Create a worktree (not implemented)\n");
-  printf("  cd [query]       Interactive selector or cd to query\n");
-  printf("  [query]          Shorthand for cd [query]\n");
+void print_help(const char *tries_path) {
+  // Use token expansion for colored help output
+  Z_CLEANUP(zstr_free) zstr help = zstr_from(
+    "{h1}try something!{reset}\n\n"
+    "Lightweight experiments for people with ADHD\n\n"
+    "This tool is not meant to be used directly,\n"
+    "but added to your ~/.zshrc or ~/.bashrc:\n\n"
+    "  {b}eval \"$(try init ~/src/tries)\"{/b}\n\n"
+    "For fish shell, add to ~/.config/fish/config.fish:\n\n"
+    "  {b}eval (try init ~/src/tries | string collect){/b}\n\n"
+    "{h2}Usage:{text}\n\n"
+    "  init [--path PATH]  # Initialize shell function for aliasing\n"
+    "  cd [QUERY]          # Interactive selector\n"
+    "  clone <git-uri> [name]  # Clone git repo into date-prefixed directory\n\n"
+    "{h2}Clone Examples:{text}\n\n"
+    "  try clone https://github.com/tobi/try.git\n"
+    "  {dim}# Creates: 2025-11-30-tobi-try{reset}\n\n"
+    "  try clone https://github.com/tobi/try.git my-fork\n"
+    "  {dim}# Creates: 2025-11-30-my-fork{reset}\n\n"
+    "{h2}Defaults:{reset}\n"
+    "  Default path: {dim}~/src/tries{reset}\n");
+
+  if (tries_path && strlen(tries_path) > 0) {
+    zstr_fmt(&help, "  Current path: {dim}%s{reset}\n", tries_path);
+  }
+
+  Z_CLEANUP(zstr_free) zstr expanded = zstr_expand_tokens(zstr_cstr(&help));
+  fprintf(stderr, "%s", zstr_cstr(&expanded));
 }
 
 int main(int argc, char **argv) {
@@ -48,8 +68,16 @@ int main(int argc, char **argv) {
       test_mode.test_mode = true;
       test_keys = argv[i] + 11;
       test_mode.inject_keys = test_keys;
+    } else if (strcmp(argv[i], "--no-expand-tokens") == 0) {
+      zstr_disable_token_expansion = true;
     } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-      print_help();
+      // Determine tries_path first before showing help
+      if (zstr_is_empty(&tries_path)) {
+        Z_CLEANUP(zstr_free) zstr default_path = get_default_tries_path();
+        print_help(zstr_cstr(&default_path));
+      } else {
+        print_help(zstr_cstr(&tries_path));
+      }
       return 0;
     } else {
       cmd_argv[cmd_argc++] = argv[i];
@@ -81,7 +109,7 @@ int main(int argc, char **argv) {
   TestMode *test_mode_ptr = test_mode.test_mode ? &test_mode : NULL;
 
   if (strcmp(command, "init") == 0) {
-    cmd_init(cmd_argc - 1, cmd_argv + 1);
+    cmd_init(cmd_argc - 1, cmd_argv + 1, path_cstr);
   } else if (strcmp(command, "clone") == 0) {
     cmd_clone(cmd_argc - 1, cmd_argv + 1, path_cstr);
   } else if (strcmp(command, "worktree") == 0) {
