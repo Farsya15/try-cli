@@ -2,216 +2,161 @@
 
 ## Overview
 
-The TUI provides an interactive directory selector for the `try` CLI tool, featuring fuzzy search, keyboard navigation, and responsive layout that adapts to terminal window size changes.
+The TUI provides an interactive directory selector featuring fuzzy search, keyboard navigation, and responsive layout that adapts to terminal window size changes.
 
-## Terminal Size Introspection
+## Terminal Size
 
-### Window Size Detection
+### Detection Priority
 
-The TUI uses a multi-fallback approach to determine terminal dimensions:
+1. Query terminal for current dimensions (rows × columns)
+2. Fall back to environment variables if available
+3. Default to 80 columns × 24 rows if detection fails
 
-1. **Primary Method**: `ioctl(STDERR_FILENO, TIOCGWINSZ, &ws)`
-   - Uses POSIX `ioctl` to query terminal size directly
-   - Most reliable and efficient method
+### Dynamic Layout
 
-2. **Secondary Method**: External `tput` command
-   - Falls back to `tput cols` and `tput lines` commands
-   - Useful when ioctl is unavailable
+Layout dimensions are recalculated on every render:
 
-3. **Fallback Defaults**: 80 columns × 24 rows
-   - Used when all detection methods fail
-   - Ensures TUI functions even in constrained environments
-
-### Dynamic Layout Calculation
-
-Layout dimensions are recalculated on every render cycle:
-
-```c
-int rows, cols;
-get_window_size(&rows, &cols);
-
-// Header: 3 lines (title + separator + search)
-int header_height = 3;
-
-// Footer: 2 lines (separator + help)
-int footer_height = 2;
-
-// List area: remaining space
-int list_height = rows - header_height - footer_height;
-```
+- **Header**: 3 lines (title + separator + search input)
+- **Footer**: 2 lines (separator + help text)
+- **List area**: Remaining vertical space
 
 ## Resize Handling
 
-### SIGWINCH Signal Handling
+When terminal is resized:
 
-Terminal resize events are handled through POSIX signals:
+1. Interrupt any blocking input read
+2. Query new terminal dimensions
+3. Re-render UI with updated layout
+4. Preserve selection index and scroll position
 
-- **Signal Registration**: `sigaction(SIGWINCH, &handle_winch, NULL)`
-- **Handler Behavior**: Minimal handler that simply interrupts blocking I/O
-- **Interrupt Mechanism**: `read_key()` returns `KEY_RESIZE` when interrupted
+## Display Layout
 
-### Resize Event Processing
+### Two-Layer Entry Display
 
-When a resize occurs:
+Each directory entry has two display components:
 
-1. **Signal Interrupt**: `SIGWINCH` interrupts the `read()` call in `read_key()`
-2. **Special Return Code**: `read_key()` returns `KEY_RESIZE` (-2)
-3. **Main Loop Response**: TUI continues to next iteration without processing input
-4. **Automatic Re-render**: Next `render()` call uses new window dimensions
-5. **State Preservation**: Selection index and scroll offset are maintained
+**Primary Layer (left-aligned):**
+- Selection indicator (`→` for selected, space for others)
+- Directory icon (📁)
+- Directory name with fuzzy match highlighting
+- Truncated with ellipsis (`…`) if too long
 
-### Layout Adaptation
+**Secondary Layer (right-aligned):**
+- Relative timestamp ("just now", "2h ago", "3d ago")
+- Fuzzy match score (e.g., "3.2")
+- Only shown when sufficient space exists
 
-Resize handling ensures:
-- **Immediate Responsiveness**: UI updates immediately after resize
-- **State Continuity**: User selection and scroll position preserved
-- **Content Reflow**: Text wrapping and truncation adapt to new dimensions
+### Layout Rules
 
-## Path and Metadata Layer Architecture
-
-### Two-Layer Display System
-
-The TUI uses a dual-layer approach for displaying directory entries:
-
-#### Primary Layer: Directory Path
-- **Content**: Directory name with fuzzy match highlighting
-- **Position**: Left-aligned after icon and selection indicator
-- **Behavior**: Expands to fill available space, truncated with ellipsis if needed
-
-#### Secondary Layer: Metadata
-- **Content**: Relative timestamp and fuzzy match score
-- **Position**: Right-aligned, always anchored to terminal right edge
-- **Behavior**: Only displayed when sufficient space exists
-
-### Layout Calculation Algorithm
-
-For each directory entry line:
-
-```c
-// Fixed prefix components
-int prefix_len = 5; // "→ 📁 " (selection arrow + emoji + space)
-
-// Metadata calculation
-int meta_len = timestamp_length + score_length; // e.g., "2h ago, 3.2"
-
-// Available space for path
-int max_path_len = cols - prefix_len - 1; // Reserve 1 char safety margin
-
-// Metadata positioning
-int meta_start_col = cols - meta_len - 1; // Right-aligned with margin
-int path_end_col = prefix_len + actual_path_len;
-
-// Display metadata only if no overlap
-bool show_metadata = (path_end_col + 1) < meta_start_col;
+```
+[→] [📁] [directory-name.............] [timestamp, score]
+     ^                                  ^
+     left-aligned                       right-aligned
 ```
 
-## Metadata Right-Bound Positioning
+- Metadata is anchored to terminal right edge
+- Path expands to fill available space
+- If path would overlap metadata, metadata is hidden
+- If path is truncated, metadata is hidden
 
-### Absolute Right Alignment
+## Path Truncation
 
-Metadata is always positioned relative to the terminal right edge:
+When paths exceed available space:
 
-- **Anchor Point**: `terminal_width - metadata_length - 1`
-- **Coordinate System**: 1-based column indexing (ANSI terminal standard)
-- **Margin**: 1 character gap from right edge prevents wrapping
+1. Calculate maximum visible characters
+2. Preserve formatting tokens (don't split `{b}...{/b}`)
+3. Truncate at character boundary
+4. Append ellipsis character (`…`)
 
-### Conditional Display Logic
-
-Metadata visibility depends on available space:
-
-```c
-// Only show metadata if path doesn't overlap
-if (!path_truncated && path_end_position + 1 < metadata_start_position) {
-    display_metadata_with_padding();
-}
+Example:
+```
+Full:      "2025-11-29-very-long-project-name"
+Truncated: "2025-11-29-very-long-pro…"
 ```
 
-### Padding Calculation
+## Metadata Display
 
-When metadata is displayed:
+### Relative Timestamps
 
-```c
-int padding_needed = metadata_start_column - path_end_column;
-char padding[256];
-memset(padding, ' ', padding_needed);
+| Age | Display |
+|-----|---------|
+| < 1 minute | "just now" |
+| < 1 hour | "Xm ago" |
+| < 24 hours | "Xh ago" |
+| < 7 days | "Xd ago" |
+| ≥ 7 days | "Xw ago" |
+
+### Score Format
+
+- Single decimal precision: "3.2", "10.5"
+- Displayed after timestamp, separated by comma
+
+### Metadata Positioning
+
+```
+metadata_start = terminal_width - metadata_length - margin
+show_metadata = path_end + gap < metadata_start
 ```
 
-## Path Truncation with Ellipsis
+## Visual Layout
 
-### Truncation Algorithm
+### Header (lines 1-3)
 
-Paths are truncated when they exceed available space:
-
-```c
-bool needs_truncation = plain_path_length > max_allowed_length;
-if (needs_truncation && max_allowed_length > 4) {
-    int chars_to_keep = max_allowed_length - 1; // Reserve space for "…"
-
-    // Copy characters, preserving token structure
-    int visible_chars = 0;
-    while (*source && visible_chars < chars_to_keep) {
-        if (*source == '{') {
-            // Copy entire token to preserve formatting
-            copy_token_to_destination();
-        } else {
-            copy_char_to_destination();
-            visible_chars++;
-        }
-    }
-
-    append_ellipsis("…");
-}
-```
-
-### Token-Aware Truncation
-
-The truncation algorithm preserves ANSI token integrity:
-
-- **Token Recognition**: Detects `{token}` patterns in rendered strings
-- **Atomic Copying**: Tokens are copied entirely or not at all
-- **Visible Character Counting**: Only counts displayable characters toward limit
-- **Ellipsis Addition**: Unicode "…" character appended to indicate truncation
-
-### Truncation Impact on Metadata
-
-When paths are truncated, metadata is hidden:
-
-```c
-// Metadata suppressed when path truncation occurs
-bool show_metadata = !path_truncated && has_sufficient_space;
-```
-
-This ensures the UI remains clean and readable when space is constrained.
-
-## Layout Components
-
-### Header Section (Lines 1-3)
 ```
 ┌─────────────────────────────────────────────────┐
-│ 📁 Try Directory Selection                      │
+│ 📁 Try Selector                                  │
 ├─────────────────────────────────────────────────┤
-│ Search: [user input]                            │
+│ > user query here                                │
 └─────────────────────────────────────────────────┘
 ```
 
-### List Section (Dynamic Height)
+### List Section (dynamic height)
+
 ```
-  → 📁 [path....................................] [metadata]
-    📁 [path....................................] [metadata]
-    📁 [path....................................] [metadata]
+→ 📁 2025-11-29-project                  just now, 5.2
+  📁 2025-11-28-another-project             2h ago, 3.1
+  📁 2025-11-27-old-thing                   3d ago, 2.4
 ```
 
-### Footer Section (Lines -2 to -1)
+### Footer (bottom 2 lines)
+
 ```
 ┌─────────────────────────────────────────────────┐
-│ ↑/↓: Navigate  Enter: Select  ESC: Cancel       │
+│ ↑/↓: Navigate  Enter: Select  Esc: Cancel        │
 └─────────────────────────────────────────────────┘
 ```
 
-## Performance Characteristics
+## Keyboard Input
 
-- **Render Frequency**: Full re-render on every keypress and resize
-- **Layout Calculation**: O(1) per entry, O(n) for n entries
-- **Memory Usage**: Minimal, reuses buffers between renders
-- **Responsiveness**: Immediate visual feedback for all interactions</content>
-<parameter name="filePath">docs/tui_spec.md
+| Key | Action |
+|-----|--------|
+| ↑ / Ctrl-P | Move selection up |
+| ↓ / Ctrl-N | Move selection down |
+| Enter | Select current entry |
+| Esc / Ctrl-C | Cancel selection |
+| Backspace | Delete last query character |
+| Any printable | Append to query, re-filter |
+
+## Scrolling
+
+- List scrolls to keep selection visible
+- Selection clamped to valid range (0 to entry_count - 1)
+- Scroll offset adjusts when selection moves outside visible area
+
+## Actions
+
+Selection can result in three action types:
+
+| Action | Trigger | Result |
+|--------|---------|--------|
+| CD | Select existing directory | Navigate to directory |
+| MKDIR | Select "[new]" entry | Create and navigate to new directory |
+| CANCEL | Press Esc | Exit without action |
+
+## New Directory Creation
+
+When query doesn't match any existing directory:
+
+- Show "[new] query-text" as first option
+- Selecting creates `YYYY-MM-DD-query-text` directory
+- New directory is created in tries base path

@@ -113,7 +113,7 @@ Cancelled.
 Compact help shown when running `try` directly:
 
 ```
-try - ephemeral workspace manager
+try vX.Y.Z - ephemeral workspace manager
 
 To use try, add to your shell config:
 
@@ -123,9 +123,14 @@ To use try, add to your shell config:
   # fish (~/.config/fish/config.fish)
   eval (try init ~/src/tries | string collect)
 
-Then use: try [query]     - select directory
-          try clone <url> - clone repo
-          try --help      - full help
+Then use:
+  try [query]         Interactive directory selector
+  try clone <url>     Clone repo into dated directory
+  try worktree <name> Create worktree from current git repo
+  try --help          Show this help
+
+Manual mode (without alias):
+  try exec [query]    Output shell script to eval
 ```
 
 ## Init Command

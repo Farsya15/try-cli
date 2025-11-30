@@ -1,171 +1,94 @@
 # Token System Specification
 
-This document describes the token-based text formatting system used throughout the `try` CLI tool for dynamic styling and ANSI escape code management.
-
 ## Overview
 
-The token system provides a declarative way to apply text formatting without hardcoding ANSI escape sequences. Text containing tokens is processed through an expansion function that replaces tokens with their corresponding ANSI codes, enabling consistent styling across the application.
+The token system provides a declarative way to apply text formatting without hardcoding ANSI escape sequences. Text containing tokens is processed through an expansion function that replaces tokens with their corresponding ANSI codes.
 
 ## Token Format
 
 Tokens are placeholder strings enclosed in curly braces: `{token_name}`
 
-- Opening tokens apply formatting: `{bold}`, `{dim}`
-- Closing tokens reset formatting: `{/bold}`, `{/fg}`
-- Self-closing tokens may exist for specific use cases
+- Opening tokens apply formatting: `{b}`, `{dim}`
+- Closing tokens reset formatting: `{/b}`, `{/fg}`
 
 ## Available Tokens
 
-### Text Formatting Tokens
+### Text Formatting
 
-| Token | ANSI Code | Description | Usage |
-|-------|-----------|-------------|-------|
-| `{b}` | `\033[1m\033[33m` | Bold + Yellow | Highlighted text, fuzzy match characters |
-| `{/b}` | `\033[22m\033[39m` | Reset bold and foreground | End bold formatting and reset color |
-| `{dim}` | `\033[90m` | Bright black (gray) | Secondary/de-emphasized text |
-| `{text}` | `\033[0m` | Full reset | Normal text (complete reset) |
-| `{reset}` | `\033[0m` | Full reset | Complete reset of all formatting |
-| `{/fg}` | `\033[39m` | Reset foreground | Reset foreground color to default |
+| Token | Effect | Description |
+|-------|--------|-------------|
+| `{b}` | Bold + Yellow | Highlighted text, fuzzy match characters |
+| `{/b}` | Reset bold + foreground | End bold formatting |
+| `{dim}` | Gray (bright black) | Secondary/de-emphasized text |
+| `{text}` | Full reset | Normal text |
+| `{reset}` | Full reset | Complete reset of all formatting |
+| `{/fg}` | Reset foreground | Reset foreground color only |
 
-### Heading Tokens
+### Headings
 
-| Token | ANSI Code | Description | Usage |
-|-------|-----------|-------------|-------|
-| `{h1}` | `\033[1;38;5;214m` | Bold + Orange | Primary headings |
-| `{h2}` | `\033[1;34m` | Bold + Blue | Secondary headings |
+| Token | Effect | Description |
+|-------|--------|-------------|
+| `{h1}` | Bold + Orange | Primary headings |
+| `{h2}` | Bold + Blue | Secondary headings |
 
-### Selection Tokens
+### Selection
 
-| Token | ANSI Code | Description | Usage |
-|-------|-----------|-------------|-------|
-| `{section}` | `\033[1m` | Bold | Start of selected/highlighted section |
-| `{/section}` | `\033[0m` | Full reset | End of selected section |
+| Token | Effect | Description |
+|-------|--------|-------------|
+| `{section}` | Bold | Start of selected/highlighted section |
+| `{/section}` | Full reset | End of selected section |
 
-## ANSI Constants
+## Token Expansion
 
-The following ANSI escape sequences are defined as constants:
+### Process
 
-```c
-#define ANSI_RESET     "\033[0m"
-#define ANSI_BOLD      "\033[1m"
-#define ANSI_DIM       "\033[2m"
-#define ANSI_RED       "\033[31m"
-#define ANSI_GREEN     "\033[32m"
-#define ANSI_YELLOW    "\033[33m"
-#define ANSI_BLUE      "\033[34m"
-#define ANSI_MAGENTA   "\033[35m"
-#define ANSI_CYAN      "\033[36m"
-#define ANSI_WHITE     "\033[37m"
+1. Scan input string for `{...}` patterns
+2. Replace each known token with its ANSI sequence
+3. Leave unknown tokens unchanged
+4. Return formatted string
+
+### Example
+
 ```
-
-## Token Expansion Process
-
-1. **Input**: String containing embedded tokens
-2. **Processing**: Replace each `{token}` with corresponding ANSI sequence
-3. **Output**: ANSI-formatted string ready for terminal display
-
-### Example Expansion
-
-```c
-// Input string
-"Status: {b}OK{/b} - {dim}completed{/fg}"
-
-// After expansion
-"Status: \033[1m\033[33mOK\033[22m\033[39m - \033[90mcompleted\033[39m"
+Input:  "Status: {b}OK{/b} - {dim}completed{/fg}"
+Output: "Status: [bold yellow]OK[reset] - [gray]completed[reset fg]"
 ```
 
 ## Usage Patterns
 
-### Fuzzy Matching Highlighting
+### Fuzzy Match Highlighting
 
-```c
-// Input: "2025-11-29-test", query: "te"
-// Rendered: "2025-11-29-{b}te{/b}st"
-// Display: "2025-11-29-[bold yellow]te[reset bold]st"
+```
+Input text: "2025-11-29-test"
+Query: "te"
+Rendered: "2025-11-29-{b}te{/b}st"
+Displayed: "2025-11-29-" + [bold yellow]"te"[reset] + "st"
 ```
 
-### UI Element Formatting
+### Date Prefix Dimming
 
-```c
-// Status message
-"{h1}Try Selector{/h1}\n"
-"{dim}Query:{/fg} {b}%s{/b}\n"
-"Found {section}%d{/section} matches\n"
+```
+Directory: "2025-11-29-project"
+Rendered: "{dim}2025-11-29-{/fg}project"
+Displayed: [gray]"2025-11-29-"[reset] + "project"
 ```
 
-### Date Dimming
+### UI Elements
 
-```c
-// Directory with date prefix
-"{dim}2025-11-29-{/fg}project-name"
 ```
-
-## Implementation Details
-
-### Expansion Function
-
-The `zstr_expand_tokens()` function in `src/utils.c` performs the replacement:
-
-- Iterates through the input string
-- Detects token patterns `{...}`
-- Replaces each token with its ANSI equivalent
-- Returns a new formatted string
-
-### Token Validation
-
-- Unknown tokens are left unchanged in the output
-- Malformed tokens (missing closing `}`) are preserved as-is
-- Nested tokens are not supported
-
-### Performance Considerations
-
-- Token expansion is performed once per render cycle
-- ANSI codes are compact (4-10 bytes per sequence)
-- No runtime allocation overhead for known tokens
+"{h1}Try Selector{reset}"
+"{dim}Query:{/fg} {b}user-input{/b}"
+```
 
 ## Design Principles
 
-### Declarative Styling
+- **Declarative**: Styling defined in data, not code
+- **Consistent**: Centralized token definitions ensure uniform appearance
+- **Extensible**: New tokens can be added without changing usage patterns
+- **Graceful degradation**: Unknown tokens pass through unchanged
 
-Tokens allow styling to be defined in data rather than code:
+## Validation Rules
 
-```c
-// Instead of:
-printf("\033[1;33m%s\033[22m", text);
-
-// Use:
-printf("%s", expand_tokens("{b}" + text + "{/b}"));
-```
-
-### Consistency
-
-Centralized token definitions ensure consistent appearance across all UI components.
-
-### Maintainability
-
-Adding new styles requires only:
-1. Define the token in the expansion function
-2. Use the token in formatting strings
-
-### Terminal Compatibility
-
-ANSI codes are widely supported in modern terminals. The system gracefully degrades when ANSI is unavailable (tokens remain visible as plain text).
-
-## Integration with Fuzzy Matching
-
-The fuzzy matching system (`src/fuzzy.c`) inserts `{b}` tokens around matched characters:
-
-1. Character matching identifies positions
-2. `{b}` tokens wrap matched characters
-3. `{/b}` tokens close the highlighting
-4. Final string is ready for token expansion and display
-
-## Future Extensions
-
-The token system can be extended with:
-
-- Additional color tokens (`{red}`, `{green}`, etc.)
-- Background color tokens (`{bg_red}`)
-- Style combinations (`{bold_red}`)
-- Conditional tokens based on terminal capabilities</content>
-<parameter name="filePath">docs/token_system.md
+- Unknown tokens are preserved as-is in output
+- Malformed tokens (missing closing `}`) are preserved as-is
+- Nested tokens are not supported

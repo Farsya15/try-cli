@@ -1,15 +1,13 @@
 # Fuzzy Matching Specification
 
-This document describes the fuzzy matching algorithm used in the `try` CLI tool for scoring and filtering directory entries during interactive selection.
-
 ## Overview
 
 The fuzzy matching system evaluates how well a directory name matches a user's search query. It combines character-level matching with contextual bonuses to rank results, favoring recently accessed directories and those with structured naming conventions.
 
 ## Input/Output
 
-- **Input**: Directory name (string), search query (string), last modification time (timestamp)
-- **Output**: Numeric score (float), highlighted text with formatting tokens
+- **Input**: Directory name, search query (optional), last modification time
+- **Output**: Numeric score, highlighted text with formatting tokens
 
 ## Algorithm Phases
 
@@ -38,26 +36,29 @@ Perform sequential matching of query characters against the directory name:
 
 ### 4. Score Multipliers
 
-**Important**: These multipliers are applied **only to the fuzzy match score** (character matches + bonuses), not to contextual bonuses. This ensures that adding a query doesn't crush the base score.
+Applied **only to the fuzzy match score** (character matches + bonuses), not to contextual bonuses:
 
-- **Density multiplier**: fuzzy_score × (query_length / last_match_position + 1)
-  - Rewards matches concentrated toward the beginning of the string
-- **Length penalty**: fuzzy_score × (10 / string_length + 10)
-  - Penalizes longer directory names to favor concise matches
+- **Density multiplier**: `fuzzy_score × (query_length / (last_match_position + 1))`
+  - Rewards matches concentrated toward the beginning
+- **Length penalty**: `fuzzy_score × (10 / (string_length + 10))`
+  - Penalizes longer directory names
 
 ### 5. Contextual Bonuses
 
-**Important**: These bonuses are added **after** multipliers are applied, so they maintain their full value.
+Added **after** multipliers are applied:
 
 - **Date prefix bonus**: +2.0 if directory name starts with `YYYY-MM-DD-` pattern
 - **Recency bonus**: +3.0 / √(hours_since_access + 1)
-  - Provides smooth decay favoring recently accessed directories
   - Just accessed: +3.0
   - 1 hour ago: +2.1
   - 24 hours ago: +0.6
   - 1 week ago: +0.2
 
-**Final score calculation**: `final_score = (fuzzy_score × density × length) + date_bonus + recency_bonus`
+### Final Score
+
+```
+final_score = (fuzzy_score × density × length) + date_bonus + recency_bonus
+```
 
 ## Highlighting
 
@@ -65,47 +66,49 @@ Matched characters are wrapped with formatting tokens:
 - `{b}` before matched character
 - `{/b}` after matched character
 
-These tokens are expanded to ANSI escape codes for terminal display.
-
 ## Scoring Examples
 
 ### Example 1: Perfect consecutive match (recent access)
+
 - Directory: `2025-11-29-project`
 - Query: `pro`
 - Last accessed: 1 hour ago
 - Matches: positions 11-12-13 (`p` `r` `o`)
-- Score components:
-  - **Fuzzy score calculation:**
-    - Base: 3 × 1.0 = 3.0
-    - Word boundary: +1.0 (at start of "project")
-    - Proximity: +2.0/√1 + 2.0/√1 = 4.0 (consecutive matches)
-    - Subtotal: 8.0
-    - Density: × (3/14) ≈ ×0.214
-    - Length: × (10/19) ≈ ×0.526
-    - After multipliers: 8.0 × 0.214 × 0.526 ≈ 0.90
-  - **Contextual bonuses (added after multipliers):**
-    - Date bonus: +2.0
-    - Recency: +3.0/√2 ≈ +2.1
-  - **Final score**: 0.90 + 2.0 + 2.1 ≈ **5.0**
+
+**Score breakdown:**
+- Fuzzy score:
+  - Base: 3 × 1.0 = 3.0
+  - Word boundary: +1.0 (at start of "project")
+  - Proximity: +2.0 + 2.0 = 4.0 (consecutive)
+  - Subtotal: 8.0
+  - Density: × (3/14) ≈ ×0.214
+  - Length: × (10/19) ≈ ×0.526
+  - After multipliers: ≈ 0.90
+- Contextual bonuses:
+  - Date bonus: +2.0
+  - Recency: +3.0/√2 ≈ +2.1
+- **Final score: ≈ 5.0**
 
 ### Example 2: Scattered match (no date prefix, older)
+
 - Directory: `my-old-project`
 - Query: `pro`
 - Last accessed: 24 hours ago
 - Matches: positions 7-8-10 (`p` `r` `o`)
-- Score components:
-  - **Fuzzy score calculation:**
-    - Base: 3 × 1.0 = 3.0
-    - Word boundary: +1.0
-    - Proximity: +2.0/√1 + 2.0/√2 ≈ 3.4
-    - Subtotal: 7.4
-    - Density: × (3/11) ≈ ×0.273
-    - Length: × (10/24) ≈ ×0.417
-    - After multipliers: 7.4 × 0.273 × 0.417 ≈ 0.84
-  - **Contextual bonuses (added after multipliers):**
-    - Date bonus: +0.0 (no date prefix)
-    - Recency: +3.0/√25 = +0.6
-  - **Final score**: 0.84 + 0.0 + 0.6 ≈ **1.4**
+
+**Score breakdown:**
+- Fuzzy score:
+  - Base: 3 × 1.0 = 3.0
+  - Word boundary: +1.0
+  - Proximity: +2.0/√1 + 2.0/√2 ≈ 3.4
+  - Subtotal: 7.4
+  - Density: × (3/11) ≈ ×0.273
+  - Length: × (10/24) ≈ ×0.417
+  - After multipliers: ≈ 0.84
+- Contextual bonuses:
+  - Date bonus: +0.0
+  - Recency: +3.0/√25 = +0.6
+- **Final score: ≈ 1.4**
 
 ## Design Principles
 
@@ -122,82 +125,79 @@ These tokens are expanded to ANSI escape codes for terminal display.
 - Zero score occurs when query characters cannot be matched in sequence
 - Partial matches are not allowed - all query characters must be found
 
-## Pseudocode Implementation
+## Pseudo-code
 
+```ruby
+def process_entries(query, entries)
+  entries.filter_map do |entry|
+    has_date_prefix = entry.name =~ /^\d{4}-\d{2}-\d{2}-/
+    date_bonus = has_date_prefix ? 2.0 : 0.0
+
+    # No query - score by recency only
+    if query.nil? || query.empty?
+      tokenized = if has_date_prefix
+        "{dim}#{entry.name[0..10]}{/fg}#{entry.name[11..]}"
+      else
+        entry.name
+      end
+
+      score = date_bonus + recency_bonus(entry.mtime)
+      { path: entry.path, score: score, rendered: tokenized }
+    else
+      # Fuzzy matching
+      result = fuzzy_match(entry.name, query)
+      next nil unless result  # No match
+
+      fuzzy_score = result[:score]
+
+      # Apply multipliers to fuzzy score only
+      fuzzy_score *= query.length.to_f / (result[:last_match_pos] + 1)
+      fuzzy_score *= 10.0 / (entry.name.length + 10.0)
+
+      # Add contextual bonuses after multipliers
+      final_score = fuzzy_score + date_bonus + recency_bonus(entry.mtime)
+
+      { path: entry.path, score: final_score, rendered: result[:highlighted] }
+    end
+  end
+end
+
+def fuzzy_match(text, query)
+  score = 0.0
+  last_match_pos = -1
+  highlighted = ""
+  query_idx = 0
+
+  text.each_char.with_index do |char, pos|
+    if query_idx < query.length && char.downcase == query[query_idx].downcase
+      score += 1.0  # Base match
+
+      # Word boundary bonus
+      if pos == 0 || !text[pos - 1].match?(/[a-zA-Z0-9]/)
+        score += 1.0
+      end
+
+      # Proximity bonus
+      if last_match_pos >= 0
+        gap = pos - last_match_pos - 1
+        score += 2.0 / Math.sqrt(gap + 1)
+      end
+
+      last_match_pos = pos
+      query_idx += 1
+      highlighted += "{b}#{char}{/b}"
+    else
+      highlighted += char
+    end
+  end
+
+  return nil if query_idx < query.length  # Incomplete match
+
+  { score: score, last_match_pos: last_match_pos, highlighted: highlighted }
+end
+
+def recency_bonus(mtime)
+  hours = (Time.now - mtime) / 3600.0
+  3.0 / Math.sqrt(hours + 1)
+end
 ```
-function process_entries(query: optional string, entries: list of {name, path, mtime})
-    result = []
-
-    for entry in entries:
-        tokenized = ""
-        has_date_prefix = entry.name matches "^\d{4}-\d{2}-\d{2}-"
-
-        # Calculate date bonus (applied after multipliers)
-        date_bonus = 0.0
-        if has_date_prefix:
-            date_bonus = 2.0
-
-        if query == null or query == "":
-            # No query - just render and score by recency
-            if has_date_prefix:
-                tokenized += "{dim}" + entry.name[0:11] + "{/fg}" + entry.name[11:]
-            else:
-                tokenized += entry.name
-
-            score = date_bonus + calculate_recency_bonus(entry.mtime)
-            result.append({path: entry.path, score: score, tokenized_string: tokenized})
-            continue
-
-        # Fuzzy matching with query
-        text_lower = entry.name.to_lower()
-        query_lower = query.to_lower()
-
-        fuzzy_score = 0.0
-        query_idx = 0
-        last_match_pos = -1
-        current_pos = 0
-
-        for i in 0..entry.name.length-1:
-            char = entry.name[i]
-            if query_idx < query.length and char.to_lower() == query_lower[query_idx]:
-                fuzzy_score += 1.0
-
-                if current_pos == 0 or not entry.name[current_pos-1].is_alphanumeric():
-                    fuzzy_score += 1.0
-
-                if last_match_pos >= 0:
-                    gap = current_pos - last_match_pos - 1
-                    fuzzy_score += 2.0 / sqrt(gap + 1)
-
-                last_match_pos = current_pos
-                query_idx += 1
-
-                tokenized += "{b}" + char + "{/b}"
-            else:
-                tokenized += char
-
-            current_pos += 1
-
-        if query_idx < query.length:
-            # Partial match - skip this entry
-            continue
-
-        # Apply multipliers only to fuzzy score
-        if last_match_pos >= 0:
-            fuzzy_score *= query.length / (last_match_pos + 1)
-
-        fuzzy_score *= 10.0 / (entry.name.length + 10.0)
-
-        # Add contextual bonuses after multipliers
-        final_score = fuzzy_score + date_bonus + calculate_recency_bonus(entry.mtime)
-
-        result.append({path: entry.path, score: final_score, tokenized_string: tokenized})
-
-    return result
-
-function calculate_recency_bonus(mtime)
-    now = current_time()
-    hours_since_access = (now - mtime) / 3600
-    return 3.0 / sqrt(hours_since_access + 1)
-```</content>
-<parameter name="filePath">docs/fuzzy_matching.md
