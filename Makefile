@@ -31,7 +31,14 @@ clean:
 install: $(BIN)
 	install -m 755 $(BIN) /usr/local/bin/try
 
-test: $(BIN)
-	./test/test.sh
+test-fast: $(BIN)
+	@echo "Running spec tests..."
+	./spec/tests/runner.sh ./dist/try
 
-.PHONY: all clean install test
+test-valgrind: $(BIN)
+	@echo "Running spec tests under valgrind..."
+	./spec/tests/runner.sh "valgrind -q --leak-check=full ./dist/try"
+
+test: test-fast test-valgrind
+
+.PHONY: all clean install test test-fast test-valgrind

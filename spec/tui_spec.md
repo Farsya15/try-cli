@@ -121,19 +121,20 @@ show_metadata = path_end + gap < metadata_start
 ### Footer (bottom 2 lines)
 
 ```
-┌─────────────────────────────────────────────────┐
-│ ↑/↓: Navigate  Enter: Select  Esc: Cancel        │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ ↑↓: Navigate  Enter: Select  Ctrl-D: Delete  Esc: Cancel      │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Keyboard Input
 
 | Key | Action |
 |-----|--------|
-| ↑ / Ctrl-P | Move selection up |
-| ↓ / Ctrl-N | Move selection down |
+| ↑ / Ctrl-P / Ctrl-K | Move selection up |
+| ↓ / Ctrl-N / Ctrl-J | Move selection down |
 | Enter | Select current entry |
 | Esc / Ctrl-C | Cancel selection |
+| Ctrl-D | Delete selected directory |
 | Backspace | Delete last query character |
 | Any printable | Append to query, re-filter |
 
@@ -151,6 +152,7 @@ Selection can result in three action types:
 |--------|---------|--------|
 | CD | Select existing directory | Navigate to directory |
 | MKDIR | Select "[new]" entry | Create and navigate to new directory |
+| DELETE | Press Ctrl-D on entry | Show delete confirmation dialog |
 | CANCEL | Press Esc | Exit without action |
 
 ## New Directory Creation
@@ -160,3 +162,75 @@ When query doesn't match any existing directory:
 - Show "[new] query-text" as first option
 - Selecting creates `YYYY-MM-DD-query-text` directory
 - New directory is created in tries base path
+
+## Directory Deletion
+
+Pressing Ctrl-D on a selected directory triggers the delete flow:
+
+### Confirmation Dialog
+
+```
+Delete Directory
+
+Are you sure you want to delete: directory-name
+  in /full/path/to/directory
+  files: X files
+  size: Y MB
+
+[YES] [NO]
+```
+
+### Confirmation Input
+
+| Key | Action |
+|-----|--------|
+| Y / y | Confirm deletion |
+| N / n / Esc | Cancel deletion |
+| Arrow keys | Navigate between YES/NO |
+| Enter | Select highlighted option |
+
+### Delete Behavior
+
+- Directory is removed recursively (`rm -rf`)
+- On success: Shows "Deleted: directory-name" status
+- On cancel: Shows "Delete cancelled" status
+- On error: Shows "Error: message" status
+- After deletion, returns to main selector with refreshed list
+- Cannot delete the "[new]" entry
+
+### Delete Script Output
+
+In exec mode, delete outputs a shell script (like all other actions). The script is evaluated by the shell wrapper, not executed directly by try.
+
+**Script structure:**
+```sh
+# Safety check + cd out + rm -rf in one shell
+/usr/bin/env sh -c '
+  target=$(realpath "/path/to/dir");
+  base=$(realpath "/tries/base");
+  case "$target" in "$base/"*) ;; *) exit 1;; esac;
+  case "$(pwd)/" in "$target/"*) cd "$base";; esac;
+  rm -rf "$target"
+'
+```
+
+**GUI behavior:**
+- Shows "Deleted: name" immediately (optimistic update)
+- Refreshes directory list
+- Actual deletion happens when shell evaluates the output
+
+### Delete Safety
+
+**Path validation (CRITICAL):**
+- Resolve target to realpath before deletion
+- Verify realpath starts with tries base directory + "/"
+- Reject if target is outside tries directory
+
+**PWD handling:**
+- Check if `$(pwd)/` starts with `$target/`
+- If inside, `cd` to tries base first
+- Then `rm -rf` the resolved path
+
+This order prevents:
+1. Deleting directories outside the tries folder (symlink attacks)
+2. Leaving the shell in an invalid state (deleted PWD)

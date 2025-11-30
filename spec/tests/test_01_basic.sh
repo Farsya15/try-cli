@@ -1,43 +1,44 @@
 # Basic compliance tests: --help, --version
+# Spec: command_line.md (Global Options)
 
 section "basic"
 
 # Test --help
-output=$("$TRY_BIN" --help 2>&1)
+output=$(try_run --help 2>&1)
 if echo "$output" | grep -q "ephemeral workspace manager"; then
     pass
 else
-    fail "--help missing expected text" "contains 'ephemeral workspace manager'" "$output"
+    fail "--help missing expected text" "contains 'ephemeral workspace manager'" "$output" "command_line.md"
 fi
 
 # Test -h
-output=$("$TRY_BIN" -h 2>&1)
+output=$(try_run -h 2>&1)
 if echo "$output" | grep -q "ephemeral workspace manager"; then
     pass
 else
-    fail "-h missing expected text" "contains 'ephemeral workspace manager'" "$output"
+    fail "-h missing expected text" "contains 'ephemeral workspace manager'" "$output" "command_line.md"
 fi
 
 # Test --version
-output=$("$TRY_BIN" --version 2>&1)
+output=$(try_run --version 2>&1)
 if echo "$output" | grep -qE "^try [0-9]+\.[0-9]+"; then
     pass
 else
-    fail "--version format incorrect" "try X.Y.Z" "$output"
+    fail "--version format incorrect" "try X.Y.Z" "$output" "command_line.md"
 fi
 
 # Test -v
-output=$("$TRY_BIN" -v 2>&1)
+output=$(try_run -v 2>&1)
 if echo "$output" | grep -qE "^try [0-9]+\.[0-9]+"; then
     pass
 else
-    fail "-v format incorrect" "try X.Y.Z" "$output"
+    fail "-v format incorrect" "try X.Y.Z" "$output" "command_line.md"
 fi
 
 # Test unknown command shows help
-output=$("$TRY_BIN" unknowncommand 2>&1 || true)
+output=$(try_run unknowncommand 2>&1)
 if echo "$output" | grep -q "Unknown command"; then
     pass
 else
-    fail "unknown command should show error" "contains 'Unknown command'" "$output"
+    fail "unknown command should show error" "contains 'Unknown command'" "$output" "command_line.md"
 fi

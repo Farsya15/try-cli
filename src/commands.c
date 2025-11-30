@@ -50,10 +50,10 @@ static int run_script(const char *script, Mode *mode) {
 
     // Execute the non-cd part if any
     if (zstr_len(&exec_script) > 0) {
-      // Remove trailing newlines/whitespace
+      // Remove trailing newlines/whitespace/continuation chars
       while (zstr_len(&exec_script) > 0) {
         char last = zstr_cstr(&exec_script)[zstr_len(&exec_script) - 1];
-        if (last == '\n' || last == ' ' || last == '\\') {
+        if (last == '\n' || last == ' ' || last == '\\' || last == '&') {
           zstr_pop_char(&exec_script);
         } else {
           break;
@@ -99,6 +99,8 @@ static int run_script(const char *script, Mode *mode) {
 }
 
 // Helper to generate date-prefixed directory name for clone
+// URL format: https://github.com/user/repo.git -> 2025-11-30-user-repo
+//             git@github.com:user/repo.git    -> 2025-11-30-user-repo
 static zstr make_clone_dirname(const char *url, const char *name) {
   zstr dir_name = zstr_init();
 
@@ -112,15 +114,46 @@ static zstr make_clone_dirname(const char *url, const char *name) {
   if (name) {
     zstr_cat(&dir_name, name);
   } else {
-    // Extract repo name from URL
+    // Extract user/repo from URL
+    // Find the repo name (after last / or :)
     const char *last_slash = strrchr(url, '/');
-    const char *repo_name = last_slash ? last_slash + 1 : url;
-    const char *dot_git = strstr(repo_name, ".git");
+    const char *last_colon = strrchr(url, ':');
+    const char *repo_start = last_slash ? last_slash + 1 :
+                             (last_colon ? last_colon + 1 : url);
 
+    // Find the user name (between second-to-last separator and last separator)
+    const char *user_start = NULL;
+    const char *user_end = NULL;
+
+    if (last_slash && last_slash > url) {
+      // Walk back to find the previous / or :
+      const char *p = last_slash - 1;
+      while (p > url && *p != '/' && *p != ':') p--;
+      if (*p == '/' || *p == ':') {
+        user_start = p + 1;
+        user_end = last_slash;
+      }
+    } else if (last_colon && last_colon > url) {
+      // git@github.com:user/repo format - user is between : and /
+      user_start = last_colon + 1;
+      const char *slash_after = strchr(user_start, '/');
+      if (slash_after) {
+        user_end = slash_after;
+      }
+    }
+
+    // Append user- if found
+    if (user_start && user_end && user_end > user_start) {
+      zstr_cat_len(&dir_name, user_start, user_end - user_start);
+      zstr_cat(&dir_name, "-");
+    }
+
+    // Append repo name (strip .git suffix)
+    const char *dot_git = strstr(repo_start, ".git");
     if (dot_git) {
-      zstr_cat_len(&dir_name, repo_name, dot_git - repo_name);
+      zstr_cat_len(&dir_name, repo_start, dot_git - repo_start);
     } else {
-      zstr_cat(&dir_name, repo_name);
+      zstr_cat(&dir_name, repo_start);
     }
   }
 
@@ -282,6 +315,11 @@ int cmd_exec(int argc, char **argv, const char *tries_path, Mode *mode) {
     return cmd_clone(argc - 1, argv + 1, tries_path, mode);
   } else if (strcmp(subcmd, "worktree") == 0) {
     return cmd_worktree(argc - 1, argv + 1, tries_path, mode);
+  } else if (strncmp(subcmd, "https://", 8) == 0 ||
+             strncmp(subcmd, "http://", 7) == 0 ||
+             strncmp(subcmd, "git@", 4) == 0) {
+    // URL shorthand for clone
+    return cmd_clone(argc, argv, tries_path, mode);
   } else {
     // Treat as query for selector (cd is default)
     return cmd_selector(argc, argv, tries_path, mode);

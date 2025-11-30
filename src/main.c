@@ -27,14 +27,22 @@ static void print_help(void) {
     "  {b}try{/b} [query]         Interactive directory selector\n"
     "  {b}try clone{/b} <url>     Clone repo into dated directory\n"
     "  {b}try worktree{/b} <name> Create worktree from current git repo\n"
-    "  {b}try --help{/b}          Show this help\n\n"
+    "  {b}try --help{/b}          Show this help\n"
+    "  {b}try --no-colors{/b}     Disable colors in output\n\n"
     "{dim}Manual mode (without alias):{reset}\n"
     "  {b}try exec{/b} [query]    Output shell script to eval\n\n"
     "{dim}Defaults:{reset}\n"
     "  Default path: {dim}~/src/tries{reset} (override with {b}--path{/b} on init)\n"
     "  Current default: {dim}");
   zstr_cat(&help, zstr_cstr(&default_path));
-  zstr_cat(&help, "{reset}\n");
+  zstr_cat(&help, "{reset}\n\n"
+    "{dim}Clone Examples:{reset}\n"
+    "  {b}try clone https://github.com/tobi/try.git{/b}\n"
+    "  {dim}# Creates: 2025-08-27-tobi-try{reset}\n\n"
+    "  {b}try clone https://github.com/tobi/try.git my-fork{/b}\n"
+    "  {dim}# Creates: my-fork{reset}\n\n"
+    "  {b}try https://github.com/tobi/try.git{/b}\n"
+    "  {dim}# Shorthand for clone (same as first example){reset}\n");
 
   Z_CLEANUP(zstr_free) zstr expanded = zstr_expand_tokens(zstr_cstr(&help));
   fprintf(stderr, "%s", zstr_cstr(&expanded));
@@ -44,6 +52,11 @@ int main(int argc, char **argv) {
   Z_CLEANUP(zstr_free) zstr tries_path = zstr_init();
   AUTO_FREE char **cmd_argv = NULL;
   int cmd_argc = 0;
+
+  // Check NO_COLOR environment variable (https://no-color.org/)
+  if (getenv("NO_COLOR") != NULL) {
+    zstr_no_colors = true;
+  }
 
   // Mode configuration
   Mode mode = {.type = MODE_DIRECT};
@@ -68,6 +81,8 @@ int main(int argc, char **argv) {
       mode.inject_keys = argv[i] + 11;
     } else if (strcmp(argv[i], "--no-expand-tokens") == 0) {
       zstr_disable_token_expansion = true;
+    } else if (strcmp(argv[i], "--no-colors") == 0) {
+      zstr_no_colors = true;
     } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
       print_help();
       return 0;
@@ -124,6 +139,11 @@ int main(int argc, char **argv) {
   } else if (strcmp(command, "worktree") == 0) {
     // Direct mode worktree
     return cmd_worktree(cmd_argc - 1, cmd_argv + 1, path_cstr, &mode);
+  } else if (strncmp(command, "https://", 8) == 0 ||
+             strncmp(command, "http://", 7) == 0 ||
+             strncmp(command, "git@", 4) == 0) {
+    // URL shorthand for clone: try <url> = try clone <url>
+    return cmd_clone(cmd_argc, cmd_argv, path_cstr, &mode);
   } else {
     // Unknown command - show help
     fprintf(stderr, "Unknown command: %s\n\n", command);

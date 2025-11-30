@@ -18,6 +18,7 @@ try exec [options] [command] [args...]
 | `--help`, `-h` | Show help text |
 | `--version`, `-v` | Show version number |
 | `--path <dir>` | Override tries directory (default: `~/src/tries`) |
+| `--no-colors` | Disable ANSI color codes in output |
 
 ## Commands
 
@@ -51,6 +52,7 @@ Clone a git repository into a dated directory.
 ```
 try clone <url> [name]
 try exec clone <url> [name]
+try <url> [name]            # URL shorthand (same as clone)
 ```
 
 **Arguments:**
@@ -58,17 +60,23 @@ try exec clone <url> [name]
 - `name` (optional): Custom name suffix (default: extracted from URL)
 
 **Behavior:**
-- Creates directory named `YYYY-MM-DD-<name>`
+- Creates directory named `YYYY-MM-DD-<user>-<repo>` (extracted from URL)
 - Clones repository into that directory
 - Returns shell script to cd into cloned directory
 
 **Examples:**
 ```
-try clone https://github.com/user/repo
-# Creates: 2025-11-30-repo
+try clone https://github.com/tobi/try.git
+# Creates: 2025-11-30-tobi-try
 
 try clone https://github.com/user/repo myproject
-# Creates: 2025-11-30-myproject
+# Creates: 2025-11-30-myproject (custom name overrides)
+
+try https://github.com/tobi/try.git
+# URL shorthand (same as first example)
+
+try clone git@github.com:tobi/try.git
+# SSH URL also works: 2025-11-30-tobi-try
 ```
 
 ### worktree
@@ -171,12 +179,43 @@ The warning comment helps users who accidentally run `try exec` directly.
 |----------|-------------|
 | `HOME` | Used to resolve default tries path (`$HOME/src/tries`) |
 | `SHELL` | Used by `init` to detect shell type |
+| `NO_COLOR` | If set, disables colors (equivalent to `--no-colors`) |
 
 ## Defaults
 
 - **Tries directory**: `~/src/tries`
 - **Date format**: `YYYY-MM-DD`
 - **Directory naming**: `YYYY-MM-DD-<name>`
+
+## Color Output
+
+By default, `try` uses ANSI color codes for syntax highlighting and visual formatting in the TUI and help output.
+
+### Disabling Colors
+
+Colors can be disabled in two ways:
+
+1. **Command-line flag**: `--no-colors`
+2. **Environment variable**: `NO_COLOR=1` (any non-empty value)
+
+The `NO_COLOR` environment variable follows the [no-color.org](https://no-color.org/) standard, which is supported by many command-line tools.
+
+**Examples:**
+```bash
+# Using the flag
+try --no-colors --help
+
+# Using the environment variable
+NO_COLOR=1 try --help
+
+# Set globally in shell config
+export NO_COLOR=1
+```
+
+**Behavior:**
+- Styling codes (bold, colors, dim, reset) are suppressed
+- Cursor control sequences for the TUI still function normally
+- Useful for piping output, accessibility, or terminals without color support
 
 ---
 

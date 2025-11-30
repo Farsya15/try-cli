@@ -25,6 +25,9 @@ static inline void cleanup_free(void *p) { free(*(void **)p); }
 // Global flag to disable token expansion (for testing)
 extern bool zstr_disable_token_expansion;
 
+// Global flag to disable colors (tokens expand to empty strings)
+extern bool zstr_no_colors;
+
 // Result of token expansion with optional cursor position
 typedef struct {
   zstr expanded;
