@@ -1,4 +1,10 @@
-#define _POSIX_C_SOURCE 200809L
+// Feature test macros for cross-platform compatibility
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#else
+#define _GNU_SOURCE
+#endif
+
 #include "terminal.h"
 #include <errno.h>
 #include <stdio.h>
