@@ -96,6 +96,16 @@ TokenExpansion zstr_expand_tokens_with_cursor(const char *text) {
           zstr_cat(&result.expanded, ANSI_RESET);
         }
         in += 10;
+      } else if (strncmp(in, "{strike}", 8) == 0) {
+        if (!zstr_no_colors) {
+          zstr_cat(&result.expanded, "\033[48;5;52m"); // Dark red background (#5f0000)
+        }
+        in += 8;
+      } else if (strncmp(in, "{/strike}", 9) == 0) {
+        if (!zstr_no_colors) {
+          zstr_cat(&result.expanded, "\033[49m"); // Reset background
+        }
+        in += 9;
       } else {
         zstr_push(&result.expanded, *in++);
         visual_pos++;

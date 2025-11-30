@@ -198,13 +198,31 @@ Are you sure you want to delete: directory-name
 - After deletion, returns to main selector with refreshed list
 - Cannot delete the "[new]" entry
 
+### Delete Mode
+
+Delete is a multi-step batch operation:
+
+**Step 1: Mark items**
+- Press `Ctrl-D` on any entry to mark it for deletion
+- Marked entries display with `{strike}` (dark red background)
+- Footer shows: `DELETE MODE | X marked | Ctrl-D: Toggle | Enter: Confirm | Esc: Cancel`
+- Can continue navigating and marking multiple items
+
+**Step 2: Confirm or cancel**
+- Press `Enter` to show confirmation dialog for all marked items
+- Press `Esc` to exit delete mode (clears all marks)
+
+**Step 3: Type YES**
+- Confirmation dialog lists all marked directories
+- Must type `YES` to proceed with deletion
+- Any other input cancels
+
 ### Delete Script Output
 
 In exec mode, delete outputs a shell script (like all other actions). The script is evaluated by the shell wrapper, not executed directly by try.
 
-**Script structure:**
+**Script structure (per item):**
 ```sh
-# Safety check + cd out + rm -rf in one shell
 /usr/bin/env sh -c '
   target=$(realpath "/path/to/dir");
   base=$(realpath "/tries/base");
@@ -214,10 +232,7 @@ In exec mode, delete outputs a shell script (like all other actions). The script
 '
 ```
 
-**GUI behavior:**
-- Shows "Deleted: name" immediately (optimistic update)
-- Refreshes directory list
-- Actual deletion happens when shell evaluates the output
+Multiple marked items emit multiple delete commands chained with `&&`.
 
 ### Delete Safety
 

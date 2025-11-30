@@ -34,6 +34,7 @@ static vec_TryEntryPtr filtered_ptrs = {0};
 static zstr filter_buffer = {0};
 static int selected_index = 0;
 static int scroll_offset = 0;
+static int marked_count = 0;  // Number of items marked for deletion
 
 static void handle_winch(int sig) {
   (void)sig;
@@ -129,30 +130,104 @@ static void filter_tries(void) {
   }
 }
 
-// Parse key from test mode injected keys (handles escape sequences)
+// Parse symbolic key name to key code
+// Supports: ENTER, RETURN, ESC, ESCAPE, UP, DOWN, LEFT, RIGHT, BACKSPACE, TAB, SPACE
+// Also: CTRL-X (where X is A-Z)
+static int parse_symbolic_key(const char *token, int len) {
+  // Uppercase comparison helper
+  #define MATCH(s) (len == (int)strlen(s) && strncasecmp(token, s, len) == 0)
+
+  if (MATCH("ENTER") || MATCH("RETURN")) return ENTER_KEY;
+  if (MATCH("ESC") || MATCH("ESCAPE")) return ESC_KEY;
+  if (MATCH("UP")) return ARROW_UP;
+  if (MATCH("DOWN")) return ARROW_DOWN;
+  if (MATCH("LEFT")) return ARROW_LEFT;
+  if (MATCH("RIGHT")) return ARROW_RIGHT;
+  if (MATCH("BACKSPACE") || MATCH("BS")) return 127;
+  if (MATCH("TAB")) return '\t';
+  if (MATCH("SPACE")) return ' ';
+
+  // CTRL-X format (e.g., CTRL-J, CTRL-C)
+  if (len >= 6 && strncasecmp(token, "CTRL-", 5) == 0) {
+    char key = token[5];
+    if (key >= 'a' && key <= 'z') key -= 32; // uppercase
+    if (key >= 'A' && key <= 'Z') {
+      return key - 'A' + 1; // Ctrl-A = 1, Ctrl-Z = 26
+    }
+  }
+
+  // Single character
+  if (len == 1) {
+    return (unsigned char)token[0];
+  }
+
+  #undef MATCH
+  return -1; // Unknown
+}
+
+// Parse key from test mode injected keys
+// Supports both raw escape sequences AND symbolic format (comma-separated)
+// Symbolic: "CTRL-J,DOWN,ENTER" or "beta,ENTER"
+// Raw: "\x0a\x1b[B\r" (legacy)
 static int read_test_key(Mode *mode) {
   if (mode->inject_keys[mode->key_index] == '\0') {
     return -1; // End of keys
   }
 
-  unsigned char c = mode->inject_keys[mode->key_index++];
+  const char *keys = mode->inject_keys;
+  int *idx = &mode->key_index;
+
+  // Skip leading comma
+  while (keys[*idx] == ',') (*idx)++;
+  if (keys[*idx] == '\0') return -1;
+
+  unsigned char c = keys[*idx];
+
+  // Check if this looks like a symbolic token
+  // Only trigger for known keywords (followed by comma or end of string)
+  #define IS_SYM(kw, klen) (strncasecmp(&keys[*idx], kw, klen) == 0 && \
+                           (keys[*idx + klen] == ',' || keys[*idx + klen] == '\0'))
+  // CTRL-X is 6 chars (CTRL- plus one letter)
+  #define IS_CTRL() (strncasecmp(&keys[*idx], "CTRL-", 5) == 0 && \
+                     keys[*idx + 5] != '\0' && \
+                     (keys[*idx + 6] == ',' || keys[*idx + 6] == '\0'))
+
+  if (IS_CTRL() ||
+      IS_SYM("ENTER", 5) ||
+      IS_SYM("RETURN", 6) ||
+      IS_SYM("ESCAPE", 6) ||
+      IS_SYM("ESC", 3) ||
+      IS_SYM("UP", 2) ||
+      IS_SYM("DOWN", 4) ||
+      IS_SYM("LEFT", 4) ||
+      IS_SYM("RIGHT", 5) ||
+      IS_SYM("BACKSPACE", 9) ||
+      IS_SYM("BS", 2) ||
+      IS_SYM("TAB", 3) ||
+      IS_SYM("SPACE", 5)) {
+  #undef IS_SYM
+  #undef IS_CTRL
+    // Find end of token (comma or end of string)
+    int start = *idx;
+    while (keys[*idx] != ',' && keys[*idx] != '\0') (*idx)++;
+    int len = *idx - start;
+    return parse_symbolic_key(&keys[start], len);
+  }
+
+  // Raw escape sequence handling (legacy format)
+  (*idx)++;
 
   if (c == '\x1b') {
     // Check for escape sequence
-    if (mode->inject_keys[mode->key_index] == '[') {
-      mode->key_index++;
-      unsigned char seq = mode->inject_keys[mode->key_index++];
+    if (keys[*idx] == '[') {
+      (*idx)++;
+      unsigned char seq = keys[(*idx)++];
       switch (seq) {
-      case 'A':
-        return ARROW_UP;
-      case 'B':
-        return ARROW_DOWN;
-      case 'C':
-        return ARROW_RIGHT;
-      case 'D':
-        return ARROW_LEFT;
-      default:
-        return ESC_KEY;
+      case 'A': return ARROW_UP;
+      case 'B': return ARROW_DOWN;
+      case 'C': return ARROW_RIGHT;
+      case 'D': return ARROW_LEFT;
+      default: return ESC_KEY;
       }
     }
     return ESC_KEY;
@@ -161,6 +236,110 @@ static int read_test_key(Mode *mode) {
   } else {
     return c;
   }
+}
+
+// Render confirmation dialog for deletion
+// Returns true if user typed "YES", false otherwise
+static bool render_delete_confirmation(const char *base_path, Mode *mode) {
+  int rows, cols;
+  get_window_size(&rows, &cols);
+
+  // Collect marked items
+  vec_TryEntryPtr marked_items = {0};
+  for (size_t i = 0; i < filtered_ptrs.length; i++) {
+    if (filtered_ptrs.data[i]->marked_for_delete) {
+      vec_push_TryEntryPtr(&marked_items, filtered_ptrs.data[i]);
+    }
+  }
+
+  zstr confirm_input = zstr_init();
+  bool confirmed = false;
+  bool is_test = (mode && mode->inject_keys);
+
+  while (1) {
+    WRITE(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
+    WRITE(STDERR_FILENO, "\x1b[H", 3);    // Home
+
+    // Title
+    Z_CLEANUP(zstr_free) zstr title = zstr_from("{b}Delete ");
+    char count_str[32];
+    snprintf(count_str, sizeof(count_str), "%zu", marked_items.length);
+    zstr_cat(&title, count_str);
+    zstr_cat(&title, " director");
+    zstr_cat(&title, marked_items.length == 1 ? "y" : "ies");
+    zstr_cat(&title, "?{/b}\x1b[K\r\n\x1b[K\r\n");
+
+    Z_CLEANUP(zstr_free) zstr title_exp = zstr_expand_tokens(zstr_cstr(&title));
+    WRITE(STDERR_FILENO, zstr_cstr(&title_exp), zstr_len(&title_exp));
+
+    // List items (max 10)
+    int max_show = 10;
+    if (max_show > (int)marked_items.length) max_show = (int)marked_items.length;
+    for (int i = 0; i < max_show; i++) {
+      Z_CLEANUP(zstr_free) zstr item = zstr_from("  {dim}-{reset} ");
+      zstr_cat(&item, zstr_cstr(&marked_items.data[i]->name));
+      zstr_cat(&item, "\x1b[K\r\n");
+      Z_CLEANUP(zstr_free) zstr item_exp = zstr_expand_tokens(zstr_cstr(&item));
+      WRITE(STDERR_FILENO, zstr_cstr(&item_exp), zstr_len(&item_exp));
+    }
+    if ((int)marked_items.length > max_show) {
+      char more[64];
+      snprintf(more, sizeof(more), "  {dim}...and %zu more{reset}\x1b[K\r\n",
+               marked_items.length - max_show);
+      Z_CLEANUP(zstr_free) zstr more_exp = zstr_expand_tokens(more);
+      WRITE(STDERR_FILENO, zstr_cstr(&more_exp), zstr_len(&more_exp));
+    }
+
+    // Prompt - track line for cursor positioning
+    // Line count: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 (prompt)
+    int prompt_line = 3 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
+    int prompt_col = 22 + (int)zstr_len(&confirm_input); // "Type YES to confirm: " = 21 chars + 1
+
+    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\r\n{dim}Type YES to confirm:{reset} ");
+    zstr_cat(&prompt, zstr_cstr(&confirm_input));
+    zstr_cat(&prompt, "\x1b[K");
+
+    Z_CLEANUP(zstr_free) zstr prompt_exp = zstr_expand_tokens(zstr_cstr(&prompt));
+    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp), zstr_len(&prompt_exp));
+
+    WRITE(STDERR_FILENO, "\r\n\x1b[J", 5); // Newline then clear rest
+
+    // Position cursor on prompt line after input
+    char cursor_pos[32];
+    snprintf(cursor_pos, sizeof(cursor_pos), "\x1b[%d;%dH", prompt_line, prompt_col);
+    WRITE(STDERR_FILENO, cursor_pos, strlen(cursor_pos));
+    WRITE(STDERR_FILENO, "\x1b[?25h", 6); // Show cursor
+
+    // Read key
+    int c;
+    if (is_test) {
+      c = read_test_key(mode);
+    } else {
+      c = read_key();
+    }
+
+    if (c == -1 || c == ESC_KEY || c == 3) {
+      break;
+    } else if (c == ENTER_KEY) {
+      // Check if input is exactly "YES"
+      if (strcmp(zstr_cstr(&confirm_input), "YES") == 0) {
+        confirmed = true;
+      }
+      break;
+    } else if (c == BACKSPACE || c == 127) {
+      if (zstr_len(&confirm_input) > 0) {
+        zstr_pop_char(&confirm_input);
+      }
+    } else if (!iscntrl(c) && c < 128) {
+      zstr_push(&confirm_input, (char)c);
+    }
+  }
+
+  vec_free_TryEntryPtr(&marked_items);
+  zstr_free(&confirm_input);
+
+  (void)base_path;
+  return confirmed;
 }
 
 static void render(const char *base_path) {
@@ -273,13 +452,26 @@ static void render(const char *base_path) {
       }
 
       // Render the directory entry
+      bool is_marked = entry->marked_for_delete;
       if (is_selected) {
-        zstr_cat(&line, "{b}→ {/b}📁 {section}");
-        zstr_cat(&line, zstr_cstr(&display_name));
-        zstr_cat(&line, "{/section}");
+        if (is_marked) {
+          zstr_cat(&line, "{b}→ {/b}🗑️  {strike}{section}");
+          zstr_cat(&line, zstr_cstr(&display_name));
+          zstr_cat(&line, "{/section}{/strike}");
+        } else {
+          zstr_cat(&line, "{b}→ {/b}📁 {section}");
+          zstr_cat(&line, zstr_cstr(&display_name));
+          zstr_cat(&line, "{/section}");
+        }
       } else {
-        zstr_cat(&line, "  📁 ");
-        zstr_cat(&line, zstr_cstr(&display_name));
+        if (is_marked) {
+          zstr_cat(&line, "  🗑️  {strike}");
+          zstr_cat(&line, zstr_cstr(&display_name));
+          zstr_cat(&line, "{/strike}");
+        } else {
+          zstr_cat(&line, "  📁 ");
+          zstr_cat(&line, zstr_cstr(&display_name));
+        }
       }
 
       // Calculate positions for right-aligned metadata
@@ -360,8 +552,19 @@ static void render(const char *base_path) {
   {
     Z_CLEANUP(zstr_free) zstr footer_fmt = zstr_from("{dim}");
     zstr_cat(&footer_fmt, sep_line);
-    zstr_cat(&footer_fmt, "{reset}\x1b[K\r\n{dim}↑/↓: Navigate  Enter: "
-                          "Select  ESC: Cancel{reset}\x1b[K\r\n");
+    zstr_cat(&footer_fmt, "{reset}\x1b[K\r\n");
+
+    if (marked_count > 0) {
+      // Delete mode footer
+      char count_str[32];
+      snprintf(count_str, sizeof(count_str), "%d", marked_count);
+      zstr_cat(&footer_fmt, "{b}DELETE MODE{/b} | ");
+      zstr_cat(&footer_fmt, count_str);
+      zstr_cat(&footer_fmt, " marked | {dim}Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel{reset}\x1b[K\r\n");
+    } else {
+      // Normal footer
+      zstr_cat(&footer_fmt, "{dim}↑/↓: Navigate  Enter: Select  Ctrl-D: Delete  Esc: Cancel{reset}\x1b[K\r\n");
+    }
 
     Z_CLEANUP(zstr_free) zstr footer = zstr_expand_tokens(zstr_cstr(&footer_fmt));
     WRITE(STDERR_FILENO, zstr_cstr(&footer), zstr_len(&footer));
@@ -439,8 +642,46 @@ SelectionResult run_selector(const char *base_path,
       break;
 
     if (c == ESC_KEY || c == 3) {
+      // If in delete mode, just clear marks and continue
+      if (marked_count > 0) {
+        for (size_t i = 0; i < all_tries.length; i++) {
+          all_tries.data[i].marked_for_delete = false;
+        }
+        marked_count = 0;
+        continue;
+      }
       break;
+    } else if (c == 4) {
+      // Ctrl-D: Toggle mark on current item
+      if (selected_index < (int)filtered_ptrs.length) {
+        TryEntry *entry = filtered_ptrs.data[selected_index];
+        entry->marked_for_delete = !entry->marked_for_delete;
+        if (entry->marked_for_delete) {
+          marked_count++;
+        } else {
+          marked_count--;
+        }
+      }
     } else if (c == ENTER_KEY) {
+      // If items are marked, show confirmation dialog
+      if (marked_count > 0) {
+        bool confirmed = render_delete_confirmation(base_path, mode);
+        if (confirmed) {
+          // Collect all marked paths
+          result.type = ACTION_DELETE;
+          result.delete_names = malloc(marked_count * sizeof(char*));
+          result.delete_count = 0;
+          for (size_t i = 0; i < filtered_ptrs.length; i++) {
+            if (filtered_ptrs.data[i]->marked_for_delete) {
+              result.delete_names[result.delete_count++] = strdup(zstr_cstr(&filtered_ptrs.data[i]->name));
+            }
+          }
+          break;
+        }
+        // Not confirmed - continue (marks cleared by ESC in dialog, or just continue if typed wrong)
+        continue;
+      }
+
       if (selected_index < (int)filtered_ptrs.length) {
         result.type = ACTION_CD;
         result.path = zstr_dup(&filtered_ptrs.data[selected_index]->path);
@@ -497,6 +738,7 @@ SelectionResult run_selector(const char *base_path,
   clear_state();
   vec_free_TryEntryPtr(&filtered_ptrs);
   zstr_free(&filter_buffer);
+  marked_count = 0;
 
   return result;
 }

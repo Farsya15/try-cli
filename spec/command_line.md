@@ -86,6 +86,7 @@ Create a git worktree in a dated directory.
 ```
 try worktree <name>
 try exec worktree <name>
+try . <name>              # Shorthand (requires name)
 ```
 
 **Arguments:**
@@ -95,6 +96,7 @@ try exec worktree <name>
 - Must be run from within a git repository
 - Creates worktree in `YYYY-MM-DD-<name>`
 - Returns shell script to cd into worktree
+- `try .` without a name is NOT supported (too easy to invoke accidentally)
 
 ### init
 
@@ -219,56 +221,9 @@ export NO_COLOR=1
 
 ---
 
-## Testing and Debugging
+## Testing
 
-> **Note**: The following options are for automated testing and debugging only.
-> They are not part of the public interface and may change without notice.
-
-### Test Options
-
-| Option | Description |
-|--------|-------------|
-| `--and-exit` | Render TUI once and exit immediately (exit code 1) |
-| `--and-keys=<keys>` | Inject key sequence into TUI, then exit |
-| `--no-expand-tokens` | Disable ANSI token expansion (outputs raw `{b}`, `{dim}`, etc.) |
-
-### Test Option Details
-
-**`--and-exit`**
-
-Renders the TUI once without waiting for input. Useful for testing rendering output.
-
-```bash
-./try --path=/tmp/test --and-exit exec 2>&1
-```
-
-**`--and-keys=<keys>`**
-
-Injects a sequence of keys as if typed by user. Supports escape sequences:
-- `\x1b` - Escape key
-- `\r` - Enter key
-- `\x1b[A` - Up arrow
-- `\x1b[B` - Down arrow
-
-```bash
-# Type "beta" then press Enter
-./try --path=/tmp/test --and-keys="beta"$'\r' exec
-
-# Press Escape to cancel
-./try --path=/tmp/test --and-keys=$'\x1b' exec
-
-# Navigate down then select
-./try --path=/tmp/test --and-keys=$'\x1b[B\r' exec
-```
-
-**`--no-expand-tokens`**
-
-Outputs formatting tokens as literal text instead of ANSI codes. Useful for testing token placement.
-
-```bash
-./try --no-expand-tokens --help
-# Output contains: {h1}try{reset} instead of ANSI codes
-```
+For test framework documentation including `--and-exit`, `--and-keys`, and test writing guidelines, see [test_spec.md](test_spec.md).
 
 ---
 

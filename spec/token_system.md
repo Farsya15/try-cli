@@ -38,6 +38,13 @@ Tokens are placeholder strings enclosed in curly braces: `{token_name}`
 | `{section}` | Bold | Start of selected/highlighted section |
 | `{/section}` | Full reset | End of selected section |
 
+### Deletion
+
+| Token | Effect | Description |
+|-------|--------|-------------|
+| `{strike}` | Dark red background | Deleted/removed items |
+| `{/strike}` | Reset background | End deletion formatting |
+
 ## Token Expansion
 
 ### Process

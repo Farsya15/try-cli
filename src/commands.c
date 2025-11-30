@@ -188,6 +188,51 @@ static zstr build_clone_script(const char *url, const char *path) {
   return script;
 }
 
+// Escape single quotes for shell: ' becomes '"'"'
+static zstr shell_escape(const char *str) {
+  zstr result = zstr_init();
+  for (const char *p = str; *p; p++) {
+    if (*p == '\'') {
+      zstr_cat(&result, "'\"'\"'");
+    } else {
+      zstr_push(&result, *p);
+    }
+  }
+  return result;
+}
+
+static zstr build_delete_script(const char *base_path, char **names, size_t count) {
+  zstr script = zstr_init();
+
+  // Get current working directory for PWD restoration
+  char cwd[1024];
+  if (getcwd(cwd, sizeof(cwd)) == NULL) {
+    cwd[0] = '\0';
+  }
+
+  // cd to base path first (escape quotes in path)
+  Z_CLEANUP(zstr_free) zstr escaped_base = shell_escape(base_path);
+  zstr_fmt(&script, "cd '%s' && \\\n", zstr_cstr(&escaped_base));
+
+  // Per-item delete commands
+  for (size_t i = 0; i < count; i++) {
+    Z_CLEANUP(zstr_free) zstr escaped_name = shell_escape(names[i]);
+    zstr_fmt(&script, "  [[ -d '%s' ]] && rm -rf '%s' && \\\n",
+             zstr_cstr(&escaped_name), zstr_cstr(&escaped_name));
+  }
+
+  // PWD restoration
+  if (cwd[0] != '\0') {
+    Z_CLEANUP(zstr_free) zstr escaped_cwd = shell_escape(cwd);
+    zstr_fmt(&script, "  ( cd '%s' 2>/dev/null || cd \"$HOME\" ) && \\\n", zstr_cstr(&escaped_cwd));
+  } else {
+    zstr_cat(&script, "  ( cd \"$HOME\" ) && \\\n");
+  }
+
+  zstr_cat(&script, "  true\n");
+  return script;
+}
+
 // ============================================================================
 // Init command - outputs shell function definition
 // ============================================================================
@@ -262,13 +307,70 @@ int cmd_clone(int argc, char **argv, const char *tries_path, Mode *mode) {
 // Worktree command
 // ============================================================================
 
+static zstr build_worktree_script(const char *worktree_path) {
+  zstr script = zstr_init();
+  zstr_fmt(&script, "git worktree add '%s' && \\\n", worktree_path);
+  zstr_fmt(&script, "  cd '%s' && \\\n", worktree_path);
+  zstr_cat(&script, "  true\n");
+  return script;
+}
+
+static bool is_in_git_repo(void) {
+  // Check if .git exists in current directory or any parent
+  char cwd[1024];
+  if (getcwd(cwd, sizeof(cwd)) == NULL) return false;
+
+  char path[1024];
+  strncpy(path, cwd, sizeof(path) - 1);
+  path[sizeof(path) - 1] = '\0';
+
+  while (strlen(path) > 0) {
+    char git_path[1100];
+    snprintf(git_path, sizeof(git_path), "%s/.git", path);
+    if (access(git_path, F_OK) == 0) return true;
+
+    // Go up one directory
+    char *last_slash = strrchr(path, '/');
+    if (last_slash == path) {
+      // At root
+      snprintf(git_path, sizeof(git_path), "/.git");
+      return access(git_path, F_OK) == 0;
+    }
+    if (last_slash) *last_slash = '\0';
+    else break;
+  }
+  return false;
+}
+
 int cmd_worktree(int argc, char **argv, const char *tries_path, Mode *mode) {
-  (void)argc;
-  (void)argv;
-  (void)tries_path;
-  (void)mode;
-  fprintf(stderr, "Worktree command not yet implemented.\n");
-  return 1;
+  if (argc < 1) {
+    fprintf(stderr, "Usage: try worktree <name>\n");
+    return 1;
+  }
+
+  const char *name = argv[0];
+
+  // Build date-prefixed path
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  char date_prefix[20];
+  strftime(date_prefix, sizeof(date_prefix), "%Y-%m-%d", t);
+
+  Z_CLEANUP(zstr_free) zstr dir_name = zstr_from(date_prefix);
+  zstr_cat(&dir_name, "-");
+  zstr_cat(&dir_name, name);
+
+  Z_CLEANUP(zstr_free) zstr full_path = join_path(tries_path, zstr_cstr(&dir_name));
+
+  // Check if we're in a git repo
+  if (is_in_git_repo()) {
+    Z_CLEANUP(zstr_free) zstr script = build_worktree_script(zstr_cstr(&full_path));
+    return run_script(zstr_cstr(&script), mode);
+  } else {
+    // Not in a git repo, just mkdir
+    Z_CLEANUP(zstr_free) zstr script = build_mkdir_script(zstr_cstr(&full_path));
+    return run_script(zstr_cstr(&script), mode);
+  }
 }
 
 // ============================================================================
@@ -286,6 +388,15 @@ int cmd_selector(int argc, char **argv, const char *tries_path, Mode *mode) {
     return run_script(zstr_cstr(&script), mode);
   } else if (result.type == ACTION_MKDIR) {
     Z_CLEANUP(zstr_free) zstr script = build_mkdir_script(zstr_cstr(&result.path));
+    zstr_free(&result.path);
+    return run_script(zstr_cstr(&script), mode);
+  } else if (result.type == ACTION_DELETE) {
+    Z_CLEANUP(zstr_free) zstr script = build_delete_script(tries_path, result.delete_names, result.delete_count);
+    // Free the delete_names array
+    for (size_t i = 0; i < result.delete_count; i++) {
+      free(result.delete_names[i]);
+    }
+    free(result.delete_names);
     zstr_free(&result.path);
     return run_script(zstr_cstr(&script), mode);
   } else {
@@ -309,6 +420,12 @@ int cmd_exec(int argc, char **argv, const char *tries_path, Mode *mode) {
   const char *subcmd = argv[0];
 
   if (strcmp(subcmd, "cd") == 0) {
+    // Check if argument is a URL (clone shorthand)
+    if (argc > 1 && (strncmp(argv[1], "https://", 8) == 0 ||
+                     strncmp(argv[1], "http://", 7) == 0 ||
+                     strncmp(argv[1], "git@", 4) == 0)) {
+      return cmd_clone(argc - 1, argv + 1, tries_path, mode);
+    }
     // Explicit cd command
     return cmd_selector(argc - 1, argv + 1, tries_path, mode);
   } else if (strcmp(subcmd, "clone") == 0) {
@@ -320,6 +437,14 @@ int cmd_exec(int argc, char **argv, const char *tries_path, Mode *mode) {
              strncmp(subcmd, "git@", 4) == 0) {
     // URL shorthand for clone
     return cmd_clone(argc, argv, tries_path, mode);
+  } else if (strcmp(subcmd, ".") == 0) {
+    // Dot shorthand for worktree (requires name)
+    if (argc < 2) {
+      fprintf(stderr, "Usage: try . <name>\n");
+      fprintf(stderr, "The name argument is required for worktree creation.\n");
+      return 1;
+    }
+    return cmd_worktree(argc - 1, argv + 1, tries_path, mode);
   } else {
     // Treat as query for selector (cd is default)
     return cmd_selector(argc, argv, tries_path, mode);

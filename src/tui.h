@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <time.h>
 
-typedef enum { ACTION_NONE, ACTION_CD, ACTION_MKDIR, ACTION_CANCEL } ActionType;
+typedef enum { ACTION_NONE, ACTION_CD, ACTION_MKDIR, ACTION_CANCEL, ACTION_DELETE } ActionType;
 
 typedef struct {
   zstr path;     // Full path
@@ -13,11 +13,14 @@ typedef struct {
   zstr rendered; // Pre-rendered string with tokens
   time_t mtime;
   float score;
+  bool marked_for_delete;  // Delete mode: marked for deletion
 } TryEntry;
 
 typedef struct {
   ActionType type;
   zstr path;
+  char **delete_names;    // For ACTION_DELETE: array of names to delete (malloc'd)
+  size_t delete_count;    // Number of items in delete_names
 } SelectionResult;
 
 // Execution mode
