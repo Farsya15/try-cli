@@ -46,6 +46,7 @@ test-valgrind: $(BIN) spec-update
 	@echo "Running spec tests under valgrind..."
 	spec/try/spec/tests/runner.sh "valgrind -q --leak-check=full ./dist/try"
 
-test: test-fast test-valgrind
+test: test-fast
+	@command -v valgrind >/dev/null 2>&1 && $(MAKE) test-valgrind || echo "Skipping valgrind tests (valgrind not installed)"
 
 .PHONY: all clean install test test-fast test-valgrind spec-update
