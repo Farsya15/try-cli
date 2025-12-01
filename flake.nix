@@ -1,62 +1,101 @@
 {
-  description = "try - A fast, interactive CLI tool for managing ephemeral development workspaces";
+  description = "try - fresh directories for every vibe (C implementation)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in
-      {
-        packages = {
-          default = pkgs.stdenv.mkDerivation {
-            pname = "try";
-            version = "1.2.0";
+  outputs = inputs@{ flake-parts, ... }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
 
-            src = ./.;
+      flake = {
+        homeModules.default = { config, lib, pkgs, ... }:
+          with lib;
+          let
+            cfg = config.programs.try;
+          in
+          {
+            options.programs.try = {
+              enable = mkEnableOption "try - fresh directories for every vibe";
 
-            nativeBuildInputs = with pkgs; [
-              gcc
-              gnumake
-            ];
+              package = mkOption {
+                type = types.package;
+                default = inputs.self.packages.${pkgs.system}.default;
+                defaultText = literalExpression "inputs.self.packages.\${pkgs.system}.default";
+                description = "The try package to use.";
+              };
 
-            buildInputs = with pkgs; [
-              # Add any runtime dependencies here
-            ];
-
-            buildPhase = ''
-              make
-            '';
-
-            installPhase = ''
-              mkdir -p $out/bin
-              cp dist/try $out/bin/
-            '';
-
-            meta = with pkgs.lib; {
-              description = "A fast, interactive CLI tool for managing ephemeral development workspaces";
-              homepage = "https://github.com/tobi/try-c";
-              license = licenses.mit;
-              maintainers = [ ];
-              platforms = platforms.unix;
+              path = mkOption {
+                type = types.str;
+                default = "~/src/tries";
+                description = "Path where try directories will be stored.";
+              };
             };
+
+            config = mkIf cfg.enable {
+              programs.bash.initExtra = mkIf config.programs.bash.enable ''
+                eval "$(${cfg.package}/bin/try init ${cfg.path})"
+              '';
+
+              programs.zsh.initContent = mkIf config.programs.zsh.enable ''
+                eval "$(${cfg.package}/bin/try init ${cfg.path})"
+              '';
+
+              programs.fish.shellInit = mkIf config.programs.fish.enable ''
+                eval (${cfg.package}/bin/try init ${cfg.path} | string collect)
+              '';
+            };
+          };
+
+        # Backwards compatibility - deprecated
+        homeManagerModules.default = builtins.trace
+          "WARNING: homeManagerModules is deprecated and will be removed in a future version. Please use homeModules instead."
+          inputs.self.homeModules.default;
+      };
+
+      perSystem = { config, self', inputs', pkgs, system, ... }: {
+        packages.default = pkgs.stdenv.mkDerivation {
+          pname = "try";
+          version = "1.2.0";
+
+          src = inputs.self;
+
+          nativeBuildInputs = with pkgs; [
+            gcc
+            gnumake
+          ];
+
+          buildPhase = ''
+            make
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp dist/try $out/bin/
+          '';
+
+          meta = with pkgs.lib; {
+            description = "Fresh directories for every vibe - C implementation";
+            homepage = "https://github.com/tobi/try-c";
+            license = licenses.mit;
+            maintainers = [ ];
+            platforms = platforms.unix;
           };
         };
 
-        apps.default = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.default;
+        apps.default = {
+          type = "app";
+          program = "${self'.packages.default}/bin/try";
         };
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             gcc
             gnumake
-            valgrind  # For memory leak testing
-            gdb       # For debugging
+            valgrind
+            gdb
           ];
 
           shellHook = ''
@@ -65,5 +104,6 @@
             echo "Run 'make test' to run tests"
           '';
         };
-      });
+      };
+    };
 }
