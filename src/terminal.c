@@ -91,9 +91,14 @@ void enable_raw_mode(void) {
   atexit(emergency_cleanup);
 
   // Register signal handlers to catch abnormal termination
-  signal(SIGINT, handle_signal);   // Ctrl-C
-  signal(SIGTERM, handle_signal);  // Termination signal
-  signal(SIGABRT, handle_signal);  // Abort signal
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = handle_signal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, NULL);   // Ctrl-C
+  sigaction(SIGTERM, &sa, NULL);  // Termination signal
+  sigaction(SIGABRT, &sa, NULL);  // Abort signal
 
   struct termios raw = orig_termios;
   raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
