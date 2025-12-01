@@ -28,18 +28,15 @@ Instantly navigate through all your experiment directories with:
 ```bash
 # Linux x86_64
 curl -sL https://github.com/tobi/try-c/releases/latest/download/try-linux-x86_64.tar.gz | tar xz
-sudo mv try-linux-x86_64 /usr/local/bin/try
+sudo mv try /usr/local/bin/
 
 # macOS (Intel)
 curl -sL https://github.com/tobi/try-c/releases/latest/download/try-darwin-x86_64.tar.gz | tar xz
-sudo mv try-darwin-x86_64 /usr/local/bin/try
+sudo mv try /usr/local/bin/
 
 # macOS (Apple Silicon)
 curl -sL https://github.com/tobi/try-c/releases/latest/download/try-darwin-aarch64.tar.gz | tar xz
-sudo mv try-darwin-aarch64 /usr/local/bin/try
-
-# Arch Linux (AUR)
-yay -S try-cli
+sudo mv try /usr/local/bin/
 ```
 
 ### Shell integration
@@ -187,6 +184,18 @@ eval "$(try init ~/code/sketches)"
 ```
 
 Default: `~/src/tries`
+
+## Arch Linux
+
+Install from the AUR using your preferred helper:
+
+```bash
+yay -S try-cli
+# or
+paru -S try-cli
+```
+
+Then add shell integration to your config (see [Shell Integration](#shell-integration) above).
 
 ## Nix
 
