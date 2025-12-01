@@ -58,7 +58,7 @@
       perSystem = { config, self', inputs', pkgs, system, ... }: {
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "try";
-          version = "1.2.5";
+          version = builtins.replaceStrings ["\n"] [""] (builtins.readFile ./VERSION);
 
           src = inputs.self;
 

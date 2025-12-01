@@ -1,6 +1,8 @@
+VERSION := $(shell cat VERSION 2>/dev/null || echo "dev")
+
 CC ?= gcc
 CFLAGS += -Wall -Wextra -Werror -Wpedantic -Wshadow -Wstrict-prototypes \
-          -Wno-unused-function -std=c11 -Isrc/libs
+          -Wno-unused-function -std=c11 -Isrc/libs -DTRY_VERSION=\"$(VERSION)\"
 LDFLAGS ?=
 
 SRC_DIR = src
@@ -49,4 +51,10 @@ test-valgrind: $(BIN) spec-update
 test: test-fast
 	@command -v valgrind >/dev/null 2>&1 && $(MAKE) test-valgrind || echo "Skipping valgrind tests (valgrind not installed)"
 
-.PHONY: all clean install test test-fast test-valgrind spec-update
+# Update PKGBUILD and .SRCINFO with current VERSION
+update-pkg:
+	@sed -i 's/^pkgver=.*/pkgver=$(VERSION)/' PKGBUILD
+	@makepkg --printsrcinfo > .SRCINFO
+	@echo "Updated PKGBUILD and .SRCINFO to version $(VERSION)"
+
+.PHONY: all clean install test test-fast test-valgrind spec-update update-pkg

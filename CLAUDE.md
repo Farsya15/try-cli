@@ -261,35 +261,25 @@ These documentation files serve as specifications and must remain synchronized w
 
 ## Release Process
 
-When preparing a new release, the following files must be updated with the new version number:
-
-### Version Bump Checklist
-
-1. **flake.nix** (line 18):
-   ```nix
-   version = "0.1.0";  # Update this
-   ```
-
-2. **.SRCINFO** (line 3):
-   ```
-   pkgver = 0.1.0  # Update this
-   ```
-
-3. **src/config.h** (if exists):
-   ```c
-   #define TRY_VERSION "0.1.0"  # Update this
-   ```
+The `VERSION` file is the single source of truth for version numbers. It is read by:
+- **Makefile**: Passes `-DTRY_VERSION` to the compiler
+- **flake.nix**: Uses `builtins.readFile ./VERSION`
+- **PKGBUILD/.SRCINFO**: Updated via `make update-pkg`
 
 ### Release Steps
 
-1. Update version numbers in all files listed above
-2. Update CHANGELOG.md (if exists) with release notes
-3. Commit changes: `git commit -m "Bump version to X.Y.Z"`
-4. Create and push tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
+1. Update the `VERSION` file with the new version number
+2. Run `make update-pkg` to sync PKGBUILD and .SRCINFO
+3. Commit with excellent release notes in the commit message body:
+   - Summarize all significant changes since the last release
+   - Group changes by category (Features, Bug Fixes, Improvements)
+   - Credit contributors where applicable
+   - Be concise but comprehensive
+4. Create and push tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin master && git push origin vX.Y.Z`
 5. GitHub Actions will automatically:
    - Build binaries for all platforms (Linux x86_64/aarch64, macOS x86_64/aarch64)
    - Create a GitHub release with binaries attached
-   - Generate release notes from commits
+   - Use commit messages to generate release notes
 
 ### Versioning Scheme
 
