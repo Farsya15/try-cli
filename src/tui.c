@@ -141,6 +141,89 @@ static void filter_tries(void) {
   }
 }
 
+// Handle readline-style keybindings for text editing
+// Returns true if the key was handled, false if it should be treated as regular input
+static bool handle_readline_keybinding(zstr *buffer, int *cursor, int key) {
+  if (key == 1) {  // Ctrl-A (move to start)
+    *cursor = 0;
+    return true;
+  } else if (key == 5) {  // Ctrl-E (move to end)
+    *cursor = (int)zstr_len(buffer);
+    return true;
+  } else if (key == 2 || key == ARROW_LEFT) {  // Ctrl-B or LEFT (move left)
+    if (*cursor > 0)
+      (*cursor)--;
+    return true;
+  } else if (key == 6 || key == ARROW_RIGHT) {  // Ctrl-F or RIGHT (move right)
+    if (*cursor < (int)zstr_len(buffer))
+      (*cursor)++;
+    return true;
+  } else if (key == 11) {  // Ctrl-K (kill after cursor)
+    int buffer_len = (int)zstr_len(buffer);
+    if (*cursor < buffer_len) {
+      char *data = zstr_data(buffer);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      for (int i = 0; i < *cursor; i++) {
+        zstr_push(&new_buffer, data[i]);
+      }
+      zstr_free(buffer);
+      *buffer = new_buffer;
+    }
+    return true;
+  } else if (key == 23) {  // Ctrl-W (kill word)
+    int buffer_len = (int)zstr_len(buffer);
+    if (*cursor > 0) {
+      char *data = zstr_data(buffer);
+
+      // Move back past any trailing non-word characters
+      int end_pos = *cursor - 1;
+      while (end_pos >= 0 && !isalnum((unsigned char)data[end_pos])) {
+        end_pos--;
+      }
+
+      // Move back past the word itself (alphanumeric characters)
+      int start_pos = end_pos;
+      while (start_pos >= 0 && isalnum((unsigned char)data[start_pos])) {
+        start_pos--;
+      }
+      start_pos++;  // Move to the first char of the word
+
+      // Build new buffer without the deleted word
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      for (int i = 0; i < start_pos; i++) {
+        zstr_push(&new_buffer, data[i]);
+      }
+      for (int i = *cursor; i < buffer_len; i++) {
+        zstr_push(&new_buffer, data[i]);
+      }
+
+      zstr_free(buffer);
+      *buffer = new_buffer;
+      *cursor = start_pos;
+    }
+    return true;
+  } else if (key == BACKSPACE || key == 127 || key == 8) {  // Backspace, DEL, or Ctrl-H
+    if (*cursor > 0) {
+      // Delete character before cursor
+      int buffer_len = (int)zstr_len(buffer);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      char *data = zstr_data(buffer);
+
+      for (int i = 0; i < buffer_len; i++) {
+        if (i != *cursor - 1) {  // Skip the character before cursor
+          zstr_push(&new_buffer, data[i]);
+        }
+      }
+
+      zstr_free(buffer);
+      *buffer = new_buffer;
+      (*cursor)--;
+    }
+    return true;
+  }
+  return false;
+}
+
 // Parse symbolic key name to key code
 // Supports: ENTER, RETURN, ESC, ESCAPE, UP, DOWN, LEFT, RIGHT, BACKSPACE, TAB, SPACE
 // Also: CTRL-X (where X is A-Z)
@@ -264,6 +347,7 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
   }
 
   zstr confirm_input = zstr_init();
+  int confirm_cursor = 0;
   bool confirmed = false;
   bool is_test = (mode && mode->inject_keys);
 
@@ -307,8 +391,21 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     int prompt_line = 4 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
 
     Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/fg}{b}YES{/b}{dim} to confirm:{reset} ");
-    zstr_cat(&prompt, zstr_cstr(&confirm_input));
-    zstr_cat(&prompt, "{cursor}\x1b[K");
+
+    const char *confirm_cstr = zstr_cstr(&confirm_input);
+    int confirm_len = (int)zstr_len(&confirm_input);
+
+    // Clamp cursor to valid range
+    int cursor = confirm_cursor;
+    if (cursor < 0) cursor = 0;
+    if (cursor > confirm_len) cursor = confirm_len;
+
+    // Add text before cursor, cursor token, and text after cursor
+    zstr_cat_len(&prompt, confirm_cstr, cursor);
+    zstr_cat(&prompt, "{cursor}");
+    zstr_cat_len(&prompt, confirm_cstr + cursor, confirm_len - cursor);
+
+    zstr_cat(&prompt, "\x1b[K");
 
     TokenExpansion prompt_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&prompt));
     int prompt_col = prompt_exp.cursor_pos;
@@ -339,12 +436,29 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
         confirmed = true;
       }
       break;
-    } else if (c == BACKSPACE || c == 127 || c == 8) {  // Backspace, DEL, or Ctrl-H
-      if (zstr_len(&confirm_input) > 0) {
-        zstr_pop_char(&confirm_input);
-      }
+    } else if (handle_readline_keybinding(&confirm_input, &confirm_cursor, c)) {
+      // Keybinding was handled
     } else if (!iscntrl(c) && c < 128) {
-      zstr_push(&confirm_input, (char)c);
+      // Insert character at cursor position
+      int buffer_len = (int)zstr_len(&confirm_input);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      char *data = zstr_data(&confirm_input);
+
+      for (int i = 0; i < buffer_len; i++) {
+        if (i == confirm_cursor) {
+          zstr_push(&new_buffer, (char)c);
+        }
+        zstr_push(&new_buffer, data[i]);
+      }
+
+      // If cursor is at the end, just append
+      if (confirm_cursor >= buffer_len) {
+        zstr_push(&new_buffer, (char)c);
+      }
+
+      zstr_free(&confirm_input);
+      confirm_input = new_buffer;
+      confirm_cursor++;
     }
   }
 
@@ -774,82 +888,9 @@ SelectionResult run_selector(const char *base_path,
         max_idx++;
       if (selected_index < max_idx - 1)
         selected_index++;
-    } else if (c == ARROW_LEFT || c == 2) {  // LEFT or Ctrl-B (move cursor left)
-      if (filter_cursor > 0)
-        filter_cursor--;
-    } else if (c == ARROW_RIGHT || c == 6) {  // RIGHT or Ctrl-F (move cursor right)
-      if (filter_cursor < (int)zstr_len(&filter_buffer))
-        filter_cursor++;
-    } else if (c == 1) {  // Ctrl-A (move to start)
-      filter_cursor = 0;
-    } else if (c == 5) {  // Ctrl-E (move to end)
-      filter_cursor = (int)zstr_len(&filter_buffer);
-    } else if (c == 11) {  // Ctrl-K (kill after cursor)
-      // Remove everything from cursor to end
-      int buffer_len = (int)zstr_len(&filter_buffer);
-      if (filter_cursor < buffer_len) {
-        char *data = zstr_data(&filter_buffer);
-        // Null-terminate at cursor position and adjust length
-        // We need to truncate - build a new string with just the prefix
-        Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
-        for (int i = 0; i < filter_cursor; i++) {
-          zstr_push(&new_buffer, data[i]);
-        }
-        zstr_free(&filter_buffer);
-        filter_buffer = new_buffer;
-        filter_tries();
-      }
-    } else if (c == 23) {  // Ctrl-W (kill word)
-      // Remove the word before cursor using alphanumeric boundaries
-      int buffer_len = (int)zstr_len(&filter_buffer);
-      if (filter_cursor > 0) {
-        char *data = zstr_data(&filter_buffer);
-
-        // Move back past any trailing non-word characters (space, hyphen, etc)
-        int end_pos = filter_cursor - 1;
-        while (end_pos >= 0 && !isalnum((unsigned char)data[end_pos])) {
-          end_pos--;
-        }
-
-        // Move back past the word itself (alphanumeric characters)
-        int start_pos = end_pos;
-        while (start_pos >= 0 && isalnum((unsigned char)data[start_pos])) {
-          start_pos--;
-        }
-        start_pos++;  // Move to the first char of the word
-
-        // Build new buffer without the deleted word
-        Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
-        for (int i = 0; i < start_pos; i++) {
-          zstr_push(&new_buffer, data[i]);
-        }
-        for (int i = filter_cursor; i < buffer_len; i++) {
-          zstr_push(&new_buffer, data[i]);
-        }
-
-        zstr_free(&filter_buffer);
-        filter_buffer = new_buffer;
-        filter_cursor = start_pos;
-        filter_tries();
-      }
-    } else if (c == BACKSPACE || c == 127 || c == 8) {  // Backspace, DEL, or Ctrl-H
-      if (filter_cursor > 0) {
-        // Delete character before cursor
-        int buffer_len = (int)zstr_len(&filter_buffer);
-        Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
-        char *data = zstr_data(&filter_buffer);
-
-        for (int i = 0; i < buffer_len; i++) {
-          if (i != filter_cursor - 1) {  // Skip the character before cursor
-            zstr_push(&new_buffer, data[i]);
-          }
-        }
-
-        zstr_free(&filter_buffer);
-        filter_buffer = new_buffer;
-        filter_cursor--;
-        filter_tries();
-      }
+    } else if (handle_readline_keybinding(&filter_buffer, &filter_cursor, c)) {
+      // Readline keybinding was handled - re-filter if buffer changed
+      filter_tries();
     } else if (!iscntrl(c) && c < 128) {
       // Insert character at cursor position
       int buffer_len = (int)zstr_len(&filter_buffer);
