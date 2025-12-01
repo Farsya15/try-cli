@@ -305,14 +305,15 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     // Line 1: title, Line 2: blank, Lines 3..3+items-1: items, then blank, then prompt
     // So prompt is at line: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 = 4 + items
     int prompt_line = 4 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
-    int prompt_col = 22 + (int)zstr_len(&confirm_input); // "Type YES to confirm: " = 21 chars + 1
 
     Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/fg}{b}YES{/b}{dim} to confirm:{reset} ");
     zstr_cat(&prompt, zstr_cstr(&confirm_input));
-    zstr_cat(&prompt, "\x1b[K");
+    zstr_cat(&prompt, "{cursor}\x1b[K");
 
-    Z_CLEANUP(zstr_free) zstr prompt_exp = zstr_expand_tokens(zstr_cstr(&prompt));
-    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp), zstr_len(&prompt_exp));
+    TokenExpansion prompt_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&prompt));
+    int prompt_col = prompt_exp.cursor_pos;
+    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp.expanded), zstr_len(&prompt_exp.expanded));
+    zstr_free(&prompt_exp.expanded);
 
     WRITE(STDERR_FILENO, "\n\x1b[J", 4); // Newline then clear rest
 
