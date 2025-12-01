@@ -31,14 +31,21 @@ clean:
 install: $(BIN)
 	install -m 755 $(BIN) /usr/local/bin/try
 
-test-fast: $(BIN)
-	@echo "Running spec tests..."
-	./spec/tests/runner.sh ./dist/try
+# Clone try repo for specs if not present, otherwise pull latest
+spec/try:
+	git clone https://github.com/tobi/try spec/try
 
-test-valgrind: $(BIN)
+spec-update: spec/try
+	cd spec/try && git pull
+
+test-fast: $(BIN) spec-update
+	@echo "Running spec tests..."
+	spec/try/spec/tests/runner.sh ./dist/try
+
+test-valgrind: $(BIN) spec-update
 	@echo "Running spec tests under valgrind..."
-	./spec/tests/runner.sh "valgrind -q --leak-check=full ./dist/try"
+	spec/try/spec/tests/runner.sh "valgrind -q --leak-check=full ./dist/try"
 
 test: test-fast test-valgrind
 
-.PHONY: all clean install test test-fast test-valgrind
+.PHONY: all clean install test test-fast test-valgrind spec-update

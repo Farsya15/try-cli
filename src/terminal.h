@@ -15,6 +15,7 @@ enum EditorKey {
   END_KEY,
   PAGE_UP,
   PAGE_DOWN,
+  KEY_UNKNOWN,  // Unrecognized escape sequence - should be ignored
   ENTER_KEY = 13,
   ESC_KEY = 27,
   KEY_RESIZE = -2

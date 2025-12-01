@@ -31,29 +31,40 @@ static int run_script(const char *script, Mode *mode) {
     // We run everything except cd (which can't work in subprocess)
     // Then print the cd command as a hint
 
-    // Find the cd command in the script (looks for "  cd '" since it's indented)
-    const char *cd_line = strstr(script, "\n  cd '");
-    if (cd_line) {
-      cd_line++; // Skip the newline, point to "  cd '"
+    // Find the cd line (starts with "  cd '" on its own line - 2-space indent)
+    const char *cd_line = NULL;
+    const char *p = script;
+    while (*p) {
+      // Check if this line starts with "  cd '" (2-space indent)
+      if (strncmp(p, "  cd '", 6) == 0) {
+        cd_line = p;
+        break;
+      }
+      // Skip to next line
+      while (*p && *p != '\n') p++;
+      if (*p == '\n') p++;
     }
 
-    // Build script without cd for execution
+    // Build script without cd line for execution
     Z_CLEANUP(zstr_free) zstr exec_script = zstr_init();
     if (cd_line && cd_line != script) {
-      // Copy everything before the cd line
-      zstr_cat_len(&exec_script, script, cd_line - script);
+      // Copy everything before the cd line, minus trailing " && \\\n"
+      size_t len = cd_line - script;
+      // Remove " && \\\n" from end (6 chars)
+      if (len >= 6) len -= 6;
+      zstr_cat_len(&exec_script, script, len);
     } else if (!cd_line) {
       // No cd, execute whole script
       zstr_cat(&exec_script, script);
     }
-    // If cd is the only line, exec_script stays empty
+    // If cd is the only command, exec_script stays empty
 
     // Execute the non-cd part if any
     if (zstr_len(&exec_script) > 0) {
-      // Remove trailing newlines/whitespace/continuation chars
+      // Remove trailing newlines/continuations
       while (zstr_len(&exec_script) > 0) {
         char last = zstr_cstr(&exec_script)[zstr_len(&exec_script) - 1];
-        if (last == '\n' || last == ' ' || last == '\\' || last == '&') {
+        if (last == '\n' || last == '\\' || last == ' ') {
           zstr_pop_char(&exec_script);
         } else {
           break;
@@ -62,14 +73,14 @@ static int run_script(const char *script, Mode *mode) {
 
       Z_CLEANUP(zstr_free) zstr cmd = zstr_from("/usr/bin/env bash -c '");
       // Escape single quotes in script
-      const char *p = zstr_cstr(&exec_script);
-      while (*p) {
-        if (*p == '\'') {
+      const char *s = zstr_cstr(&exec_script);
+      while (*s) {
+        if (*s == '\'') {
           zstr_cat(&cmd, "'\\''");
         } else {
-          zstr_push(&cmd, *p);
+          zstr_push(&cmd, *s);
         }
-        p++;
+        s++;
       }
       zstr_cat(&cmd, "'");
 
@@ -79,18 +90,12 @@ static int run_script(const char *script, Mode *mode) {
       }
     }
 
-    // Print cd hint (extract path from "  cd '/path' && \" format)
+    // Print cd hint
     if (cd_line) {
-      // Skip leading spaces
-      const char *path_start = cd_line;
-      while (*path_start == ' ') path_start++;
-      // Now at "cd '/path' && \"
-      if (strncmp(path_start, "cd '", 4) == 0) {
-        path_start += 4; // Skip "cd '"
-        const char *path_end = strchr(path_start, '\'');
-        if (path_end) {
-          printf("cd '%.*s'\n", (int)(path_end - path_start), path_start);
-        }
+      const char *path_start = cd_line + 6; // Skip "  cd '"
+      const char *path_end = strchr(path_start, '\'');
+      if (path_end) {
+        printf("cd '%.*s'\n", (int)(path_end - path_start), path_start);
       }
     }
 
@@ -167,24 +172,21 @@ static zstr make_clone_dirname(const char *url, const char *name) {
 static zstr build_cd_script(const char *path) {
   zstr script = zstr_init();
   zstr_fmt(&script, "touch '%s' && \\\n", path);
-  zstr_fmt(&script, "  cd '%s' && \\\n", path);
-  zstr_cat(&script, "  true\n");
+  zstr_fmt(&script, "  cd '%s'\n", path);
   return script;
 }
 
 static zstr build_mkdir_script(const char *path) {
   zstr script = zstr_init();
   zstr_fmt(&script, "mkdir -p '%s' && \\\n", path);
-  zstr_fmt(&script, "  cd '%s' && \\\n", path);
-  zstr_cat(&script, "  true\n");
+  zstr_fmt(&script, "  cd '%s'\n", path);
   return script;
 }
 
 static zstr build_clone_script(const char *url, const char *path) {
   zstr script = zstr_init();
   zstr_fmt(&script, "git clone '%s' '%s' && \\\n", url, path);
-  zstr_fmt(&script, "  cd '%s' && \\\n", path);
-  zstr_cat(&script, "  true\n");
+  zstr_fmt(&script, "  cd '%s'\n", path);
   return script;
 }
 
@@ -224,12 +226,11 @@ static zstr build_delete_script(const char *base_path, char **names, size_t coun
   // PWD restoration
   if (cwd[0] != '\0') {
     Z_CLEANUP(zstr_free) zstr escaped_cwd = shell_escape(cwd);
-    zstr_fmt(&script, "  ( cd '%s' 2>/dev/null || cd \"$HOME\" ) && \\\n", zstr_cstr(&escaped_cwd));
+    zstr_fmt(&script, "  ( cd '%s' 2>/dev/null || cd \"$HOME\" )\n", zstr_cstr(&escaped_cwd));
   } else {
-    zstr_cat(&script, "  ( cd \"$HOME\" ) && \\\n");
+    zstr_cat(&script, "  cd \"$HOME\"\n");
   }
 
-  zstr_cat(&script, "  true\n");
   return script;
 }
 
@@ -310,8 +311,7 @@ int cmd_clone(int argc, char **argv, const char *tries_path, Mode *mode) {
 static zstr build_worktree_script(const char *worktree_path) {
   zstr script = zstr_init();
   zstr_fmt(&script, "git worktree add '%s' && \\\n", worktree_path);
-  zstr_fmt(&script, "  cd '%s' && \\\n", worktree_path);
-  zstr_cat(&script, "  true\n");
+  zstr_fmt(&script, "  cd '%s'\n", worktree_path);
   return script;
 }
 

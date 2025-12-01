@@ -36,9 +36,17 @@ static int selected_index = 0;
 static int scroll_offset = 0;
 static int marked_count = 0;  // Number of items marked for deletion
 
+/*
+ * SIGWINCH handler - called when terminal is resized.
+ * We don't need to do anything here; the signal delivery itself
+ * interrupts the blocking read() in read_key(), which returns KEY_RESIZE.
+ * The main loop then continues, calling render() which gets the new size.
+ *
+ * Cross-platform note: SIGWINCH is POSIX and works on Linux, macOS, and BSDs.
+ * Windows would need WINDOW_BUFFER_SIZE_EVENT from ReadConsoleInput().
+ */
 static void handle_winch(int sig) {
   (void)sig;
-  // Do nothing, just interrupt read()
 }
 
 static void free_entry(TryEntry *entry) {
@@ -267,7 +275,7 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     zstr_cat(&title, count_str);
     zstr_cat(&title, " director");
     zstr_cat(&title, marked_items.length == 1 ? "y" : "ies");
-    zstr_cat(&title, "?{/b}\x1b[K\r\n\x1b[K\r\n");
+    zstr_cat(&title, "?{/b}\x1b[K\n\x1b[K\n");
 
     Z_CLEANUP(zstr_free) zstr title_exp = zstr_expand_tokens(zstr_cstr(&title));
     WRITE(STDERR_FILENO, zstr_cstr(&title_exp), zstr_len(&title_exp));
@@ -278,31 +286,32 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     for (int i = 0; i < max_show; i++) {
       Z_CLEANUP(zstr_free) zstr item = zstr_from("  {dim}-{reset} ");
       zstr_cat(&item, zstr_cstr(&marked_items.data[i]->name));
-      zstr_cat(&item, "\x1b[K\r\n");
+      zstr_cat(&item, "\x1b[K\n");
       Z_CLEANUP(zstr_free) zstr item_exp = zstr_expand_tokens(zstr_cstr(&item));
       WRITE(STDERR_FILENO, zstr_cstr(&item_exp), zstr_len(&item_exp));
     }
     if ((int)marked_items.length > max_show) {
       char more[64];
-      snprintf(more, sizeof(more), "  {dim}...and %zu more{reset}\x1b[K\r\n",
+      snprintf(more, sizeof(more), "  {dim}...and %zu more{reset}\x1b[K\n",
                marked_items.length - max_show);
       Z_CLEANUP(zstr_free) zstr more_exp = zstr_expand_tokens(more);
       WRITE(STDERR_FILENO, zstr_cstr(&more_exp), zstr_len(&more_exp));
     }
 
     // Prompt - track line for cursor positioning
-    // Line count: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 (prompt)
-    int prompt_line = 3 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
+    // Line 1: title, Line 2: blank, Lines 3..3+items-1: items, then blank, then prompt
+    // So prompt is at line: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 = 4 + items
+    int prompt_line = 4 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
     int prompt_col = 22 + (int)zstr_len(&confirm_input); // "Type YES to confirm: " = 21 chars + 1
 
-    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\r\n{dim}Type YES to confirm:{reset} ");
+    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/fg}{b}YES{/b}{dim} to confirm:{reset} ");
     zstr_cat(&prompt, zstr_cstr(&confirm_input));
     zstr_cat(&prompt, "\x1b[K");
 
     Z_CLEANUP(zstr_free) zstr prompt_exp = zstr_expand_tokens(zstr_cstr(&prompt));
     WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp), zstr_len(&prompt_exp));
 
-    WRITE(STDERR_FILENO, "\r\n\x1b[J", 5); // Newline then clear rest
+    WRITE(STDERR_FILENO, "\n\x1b[J", 4); // Newline then clear rest
 
     // Position cursor on prompt line after input
     char cursor_pos[32];
@@ -358,9 +367,9 @@ static void render(const char *base_path) {
   {
     Z_CLEANUP(zstr_free)
     zstr header_fmt =
-        zstr_from("{h1}📁 Try Directory Selection{reset}\x1b[K\r\n{dim}");
+        zstr_from("{h1}📁 Try Directory Selection{reset}\x1b[K\n{dim}");
     zstr_cat(&header_fmt, sep_line);
-    zstr_cat(&header_fmt, "{reset}\x1b[K\r\n");
+    zstr_cat(&header_fmt, "{reset}\x1b[K\n");
 
     Z_CLEANUP(zstr_free) zstr header = zstr_expand_tokens(zstr_cstr(&header_fmt));
     WRITE(STDERR_FILENO, zstr_cstr(&header), zstr_len(&header));
@@ -373,9 +382,9 @@ static void render(const char *base_path) {
     Z_CLEANUP(zstr_free)
     zstr search_fmt = zstr_from("{b}Search:{/b} ");
     zstr_cat(&search_fmt, zstr_cstr(&filter_buffer));
-    zstr_cat(&search_fmt, "{cursor}\x1b[K\r\n{dim}");
+    zstr_cat(&search_fmt, "{cursor}\x1b[K\n{dim}");
     zstr_cat(&search_fmt, sep_line);
-    zstr_cat(&search_fmt, "{reset}\x1b[K\r\n");
+    zstr_cat(&search_fmt, "{reset}\x1b[K\n");
 
     TokenExpansion search_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&search_fmt));
     search_cursor_col = search_exp.cursor_pos;
@@ -406,11 +415,10 @@ static void render(const char *base_path) {
       // Prefix is 2 chars ("→ " or "  "), icon is 2 chars (emoji), space after icon is implicit in count
       int prefix_len = 5; // 2 (arrow/spaces) + 2 (emoji) + 1 (space)
 
-      // Calculate metadata length (for later use)
+      // Build metadata strings
       Z_CLEANUP(zstr_free) zstr rel_time = format_relative_time(entry->mtime);
       char score_text[16];
       snprintf(score_text, sizeof(score_text), ", %.1f", entry->score);
-      int meta_len = zstr_len(&rel_time) + strlen(score_text);
 
       // Calculate max length for directory name - allow it to use almost full width
       // Don't reserve space for metadata here; we'll check if it fits after
@@ -455,7 +463,7 @@ static void render(const char *base_path) {
       bool is_marked = entry->marked_for_delete;
       if (is_selected) {
         if (is_marked) {
-          zstr_cat(&line, "{b}→ {/b}🗑️  {strike}{section}");
+          zstr_cat(&line, "{b}→ {/b}🗑️ {strike}{section}");
           zstr_cat(&line, zstr_cstr(&display_name));
           zstr_cat(&line, "{/section}{/strike}");
         } else {
@@ -465,7 +473,7 @@ static void render(const char *base_path) {
         }
       } else {
         if (is_marked) {
-          zstr_cat(&line, "  🗑️  {strike}");
+          zstr_cat(&line, "  🗑️ {strike}");
           zstr_cat(&line, zstr_cstr(&display_name));
           zstr_cat(&line, "{/strike}");
         } else {
@@ -474,35 +482,50 @@ static void render(const char *base_path) {
         }
       }
 
-      // Calculate positions for right-aligned metadata
+      // Build full metadata string
+      Z_CLEANUP(zstr_free) zstr full_meta = zstr_init();
+      zstr_cat(&full_meta, zstr_cstr(&rel_time));
+      zstr_cat(&full_meta, score_text);
+      int full_meta_len = (int)zstr_len(&full_meta);
+
+      // Calculate positions - metadata is always right-aligned at screen edge
       int actual_name_len = name_truncated ? max_name_len : plain_len;
       int path_end_pos = prefix_len + actual_name_len;
-      int meta_start_pos = cols - meta_len - 1; // -1 to avoid wrapping at edge
+      int meta_end_pos = cols - 1; // -1 because cols is 1-indexed width
+      int meta_start_pos = meta_end_pos - full_meta_len;
+      int available_space = meta_start_pos - path_end_pos;
 
-      // Only show metadata if there's room without overlap (at least 1 space gap)
-      if (!name_truncated && path_end_pos + 1 < meta_start_pos) {
-        int padding_len = meta_start_pos - path_end_pos;
-
-        char padding[256];
-        int safe_padding = padding_len < 255 ? padding_len : 255;
-        memset(padding, ' ', safe_padding);
-        padding[safe_padding] = '\0';
-
-        zstr_cat(&line, padding);
+      // Show metadata if there's more than 2 chars gap, truncating from left if needed
+      if (available_space > 2) {
+        // Full metadata fits with gap - add padding and full metadata
+        int padding_len = available_space;
+        for (int p = 0; p < padding_len; p++) {
+          zstr_push(&line, ' ');
+        }
         zstr_cat(&line, "{dim}");
-        zstr_cat(&line, zstr_cstr(&rel_time));
-        zstr_cat(&line, score_text);
+        zstr_cat(&line, zstr_cstr(&full_meta));
         zstr_cat(&line, "{reset}");
+      } else if (available_space > -full_meta_len + 3) {
+        // Partial overlap - show truncated metadata (cut from left)
+        // available_space can be negative if name extends into metadata area
+        int chars_to_skip = (available_space < 1) ? (1 - available_space) : 0;
+        int chars_to_show = full_meta_len - chars_to_skip;
+        if (chars_to_show > 2) {
+          zstr_cat(&line, " {dim}");
+          const char *meta_str = zstr_cstr(&full_meta);
+          zstr_cat(&line, meta_str + chars_to_skip);
+          zstr_cat(&line, "{reset}");
+        }
       }
 
-      zstr_cat(&line, "\x1b[K\r\n");
+      zstr_cat(&line, "\x1b[K\n");
 
       Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
       WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
 
     } else if (idx == (int)filtered_ptrs.length && zstr_len(&filter_buffer) > 0) {
       // Add separator line before "Create new"
-      WRITE(STDERR_FILENO, "\x1b[K\r\n", 5);
+      WRITE(STDERR_FILENO, "\x1b[K\n", 4);
       i++; // Skip next iteration since we used a line for separator
 
       // Generate preview of what the directory name will be
@@ -528,7 +551,7 @@ static void render(const char *base_path) {
         Z_CLEANUP(zstr_free)
         zstr line = zstr_from("{b}→ {/b}📂 Create new: {dim}");
         zstr_cat(&line, zstr_cstr(&preview));
-        zstr_cat(&line, "{reset}\x1b[K\r\n");
+        zstr_cat(&line, "{reset}\x1b[K\n");
 
         Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
         WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
@@ -536,13 +559,13 @@ static void render(const char *base_path) {
         Z_CLEANUP(zstr_free)
         zstr line = zstr_from("  📂 Create new: {dim}");
         zstr_cat(&line, zstr_cstr(&preview));
-        zstr_cat(&line, "{reset}\x1b[K\r\n");
+        zstr_cat(&line, "{reset}\x1b[K\n");
 
         Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
         WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
       }
     } else {
-      WRITE(STDERR_FILENO, "\x1b[K\r\n", 5);
+      WRITE(STDERR_FILENO, "\x1b[K\n", 4);
     }
   }
 
@@ -552,7 +575,7 @@ static void render(const char *base_path) {
   {
     Z_CLEANUP(zstr_free) zstr footer_fmt = zstr_from("{dim}");
     zstr_cat(&footer_fmt, sep_line);
-    zstr_cat(&footer_fmt, "{reset}\x1b[K\r\n");
+    zstr_cat(&footer_fmt, "{reset}\x1b[K\n");
 
     if (marked_count > 0) {
       // Delete mode footer
@@ -560,10 +583,10 @@ static void render(const char *base_path) {
       snprintf(count_str, sizeof(count_str), "%d", marked_count);
       zstr_cat(&footer_fmt, "{b}DELETE MODE{/b} | ");
       zstr_cat(&footer_fmt, count_str);
-      zstr_cat(&footer_fmt, " marked | {dim}Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel{reset}\x1b[K\r\n");
+      zstr_cat(&footer_fmt, " marked | {dim}Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel{reset}\x1b[K\n");
     } else {
       // Normal footer
-      zstr_cat(&footer_fmt, "{dim}↑/↓: Navigate  Enter: Select  Ctrl-D: Delete  Esc: Cancel{reset}\x1b[K\r\n");
+      zstr_cat(&footer_fmt, "{dim}↑/↓: Navigate  Enter: Select  Ctrl-D: Delete  Esc: Cancel{reset}\x1b[K\n");
     }
 
     Z_CLEANUP(zstr_free) zstr footer = zstr_expand_tokens(zstr_cstr(&footer_fmt));
@@ -636,6 +659,8 @@ SelectionResult run_selector(const char *base_path,
       c = read_key();
     }
     if (c == KEY_RESIZE) {
+      // Terminal was resized - continue to re-render with new dimensions
+      // get_window_size() is called in render() to get updated size
       continue;
     }
     if (c == -1)
@@ -730,9 +755,13 @@ SelectionResult run_selector(const char *base_path,
   }
 
   if (!is_test || !mode->inject_keys) {
-    // Clear the screen before exiting
-    WRITE(STDERR_FILENO, "\x1b[2J\x1b[H", 7); // Clear screen and move cursor to home
+    // Reset terminal state completely
     disable_raw_mode();
+    // Send final cleanup sequences
+    fprintf(stderr, "\x1b[0m");   // Reset all attributes
+    fprintf(stderr, "\x1b[2J");   // Clear screen
+    fprintf(stderr, "\x1b[H");    // Move cursor to home (1,1)
+    fflush(stderr);
   }
 
   clear_state();

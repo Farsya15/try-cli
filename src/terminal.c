@@ -5,6 +5,30 @@
 #define _GNU_SOURCE
 #endif
 
+/*
+ * Terminal handling - Cross-platform notes:
+ *
+ * Linux:
+ *   - Uses TIOCGWINSZ ioctl for window size
+ *   - SIGWINCH delivered on terminal resize
+ *   - termios API fully supported
+ *
+ * macOS:
+ *   - Same APIs as Linux (POSIX compliant)
+ *   - Requires _DARWIN_C_SOURCE for some features
+ *   - SIGWINCH works the same way
+ *
+ * Windows (future):
+ *   - Would need Windows Console API or ANSI via ConPTY
+ *   - GetConsoleScreenBufferInfo() for window size
+ *   - WINDOW_BUFFER_SIZE_EVENT for resize
+ *   - Consider using a library like crossterm or PDCurses
+ *
+ * BSD variants:
+ *   - Generally POSIX compliant like Linux/macOS
+ *   - May need _BSD_SOURCE or specific feature macros
+ */
+
 #include "terminal.h"
 #include <errno.h>
 #include <stdio.h>
@@ -33,9 +57,11 @@ void enable_raw_mode(void) {
 
   struct termios raw = orig_termios;
   raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-  raw.c_oflag &= ~(OPOST);
+  // Keep OPOST enabled so \n still converts to \r\n - safer for terminal state
   raw.c_cflag |= (CS8);
-  raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+  // Note: Keep ISIG enabled so SIGWINCH can interrupt read() for resize handling
+  // IEXTEN disabled to prevent Ctrl-V literal mode
+  raw.c_lflag &= ~(ECHO | ICANON | IEXTEN);
 
   // Timeout for read
   raw.c_cc[VMIN] = 1;
@@ -47,6 +73,18 @@ void enable_raw_mode(void) {
   hide_cursor();
 }
 
+/*
+ * Read a single keypress, handling escape sequences.
+ * Returns:
+ *   - Positive: ASCII char or special key constant (ARROW_UP, etc.)
+ *   - KEY_RESIZE (-2): SIGWINCH interrupted read, caller should redraw
+ *   - -1: EOF or error
+ *
+ * Resize handling:
+ *   When the terminal is resized, SIGWINCH is delivered, which interrupts
+ *   the blocking read() with EINTR. We return KEY_RESIZE so the caller
+ *   can call get_window_size() and redraw the UI.
+ */
 int read_key(void) {
   int nread;
   unsigned char c;
@@ -56,7 +94,7 @@ int read_key(void) {
       if (errno == EAGAIN)
         continue;
       if (errno == EINTR)
-        return -2; // KEY_RESIZE
+        return KEY_RESIZE; // Signal interrupted read (likely SIGWINCH)
       return -1;
     }
     if (nread == 0) {
@@ -102,7 +140,7 @@ int read_key(void) {
     if (seq[0] == '[') {
       if (seq[1] >= '0' && seq[1] <= '9') {
         if (read(STDIN_FILENO, &seq[2], 1) != 1)
-          return '\x1b';
+          return KEY_UNKNOWN;
         if (seq[2] == '~') {
           switch (seq[1]) {
           case '1':
@@ -120,6 +158,20 @@ int read_key(void) {
           case '8':
             return END_KEY;
           }
+        }
+        // Extended sequence like \x1b[1;5B (Ctrl+Down) - consume rest and ignore
+        if (seq[2] == ';') {
+          char discard;
+          // Read modifier and final character (e.g., "5B")
+          while (read(STDIN_FILENO, &discard, 1) == 1) {
+            if (discard >= 'A' && discard <= 'Z')
+              break;
+            if (discard >= 'a' && discard <= 'z')
+              break;
+            if (discard == '~')
+              break;
+          }
+          return KEY_UNKNOWN;
         }
       } else {
         switch (seq[1]) {
@@ -145,7 +197,7 @@ int read_key(void) {
         return END_KEY;
       }
     }
-    return '\x1b';
+    return KEY_UNKNOWN;  // Unrecognized escape sequence - don't treat as ESC
   } else {
     return c;
   }

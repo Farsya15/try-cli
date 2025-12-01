@@ -31,6 +31,11 @@ test_tries/
 tui_output.txt
 valgrind-*.log
 
+# Spec directory (cloned from try repo for testing)
+spec/*
+!spec/.gitkeep
+!spec/README.md
+
 # Core dumps
 core
 core.*
