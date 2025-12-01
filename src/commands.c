@@ -240,8 +240,10 @@ static zstr build_delete_script(const char *base_path, char **names, size_t coun
 // ============================================================================
 
 void cmd_init(int argc, char **argv, const char *tries_path) {
-  (void)argc;
-  (void)argv;
+  // If a path argument is provided, use it instead of the default
+  if (argc > 0 && argv[0] != NULL) {
+    tries_path = argv[0];
+  }
 
   // Determine if we're in fish shell
   const char *shell = getenv("SHELL");
