@@ -390,7 +390,7 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     // So prompt is at line: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 = 4 + items
     int prompt_line = 4 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
 
-    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/fg}{b}YES{/b}{dim} to confirm:{reset} ");
+    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/}{highlight}YES{/}{dim} to confirm:{reset} ");
 
     const char *confirm_cstr = zstr_cstr(&confirm_input);
     int confirm_len = (int)zstr_len(&confirm_input);
@@ -603,9 +603,9 @@ static void render(const char *base_path) {
       bool is_marked = entry->marked_for_delete;
       if (is_selected) {
         if (is_marked) {
-          zstr_cat(&line, "{b}→ {/b}🗑️ {strike}{section}");
+          zstr_cat(&line, "{b}→ {/}🗑️ {danger}{section}");
           zstr_cat(&line, zstr_cstr(&display_name));
-          zstr_cat(&line, "{/section}{/strike}");
+          zstr_cat(&line, "{/section}{/danger}");
         } else {
           zstr_cat(&line, "{b}→ {/b}📁 {section}");
           zstr_cat(&line, zstr_cstr(&display_name));
@@ -613,9 +613,9 @@ static void render(const char *base_path) {
         }
       } else {
         if (is_marked) {
-          zstr_cat(&line, "  🗑️ {strike}");
+          zstr_cat(&line, "  🗑️ {danger}");
           zstr_cat(&line, zstr_cstr(&display_name));
-          zstr_cat(&line, "{/strike}");
+          zstr_cat(&line, "{/danger}");
         } else {
           zstr_cat(&line, "  📁 ");
           zstr_cat(&line, zstr_cstr(&display_name));
@@ -721,7 +721,7 @@ static void render(const char *base_path) {
       // Delete mode footer
       char count_str[32];
       snprintf(count_str, sizeof(count_str), "%d", marked_count);
-      zstr_cat(&footer_fmt, "{b}DELETE MODE{/b} | ");
+      zstr_cat(&footer_fmt, "{highlight}DELETE MODE{/} | ");
       zstr_cat(&footer_fmt, count_str);
       zstr_cat(&footer_fmt, " marked | {dim}Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel{reset}\x1b[K\n");
     } else {
