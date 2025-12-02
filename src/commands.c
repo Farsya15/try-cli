@@ -241,8 +241,11 @@ static zstr build_delete_script(const char *base_path, vec_zstr *names) {
 // ============================================================================
 
 void cmd_init(int argc, char **argv, const char *tries_path) {
-  // If a path argument is provided, use it instead of the default
-  if (argc > 0 && argv[0] != NULL) {
+  (void)argc; (void)argv; // May be used for future options
+
+  // If a positional argument is provided, use it as the tries path
+  // e.g., "try init /tmp/custom-path"
+  if (argc > 0 && argv[0] && argv[0][0] != '-') {
     tries_path = argv[0];
   }
 
@@ -447,7 +450,11 @@ int cmd_exec(int argc, char **argv, const char *tries_path, Mode *mode) {
 
   const char *subcmd = argv[0];
 
-  if (strcmp(subcmd, "cd") == 0) {
+  if (strcmp(subcmd, "init") == 0) {
+    // Delegate to init command
+    cmd_init(argc - 1, argv + 1, tries_path);
+    return 0;
+  } else if (strcmp(subcmd, "cd") == 0) {
     // Check if argument is a URL (clone shorthand)
     if (argc > 1 && (strncmp(argv[1], "https://", 8) == 0 ||
                      strncmp(argv[1], "http://", 7) == 0 ||
