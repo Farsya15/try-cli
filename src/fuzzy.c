@@ -95,10 +95,10 @@ void fuzzy_match(TryEntry *entry, const char *query) {
       last_pos = current_pos;
       query_idx++;
 
-      // Append highlighted char
-      zstr_cat(&entry->rendered, "{b}");
+      // Append highlighted char (bold+yellow)
+      zstr_cat(&entry->rendered, "{highlight}");
       zstr_push(&entry->rendered, *orig_ptr);
-      zstr_cat(&entry->rendered, "{/b}");
+      zstr_cat(&entry->rendered, "{/}");
     } else {
       // No match, append regular char
       zstr_push(&entry->rendered, *orig_ptr);

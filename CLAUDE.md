@@ -59,7 +59,7 @@ Commands are emitted via `emit_task()` in `src/commands.c`, which prints shell s
 **Fuzzy Matching** (`src/fuzzy.c`, `src/fuzzy.h`):
 - `fuzzy_match()`: Updates TryEntry score and rendered output in-place
 - `calculate_score()`: Combines fuzzy match score with recency (mtime)
-- `highlight_matches()`: Inserts `{b}` tokens around matched characters
+- `highlight_matches()`: Inserts `{highlight}` tokens around matched characters
 - Algorithm favors consecutive character matches and recent access times
 - **Documentation**: See `spec/fuzzy_matching.md` for complete algorithm specification
 
@@ -69,8 +69,13 @@ Commands are emitted via `emit_task()` in `src/commands.c`, which prints shell s
 - Window size detection
 - Cursor visibility control
 
+**Token System** (`src/tokens.rl`, `src/tokens.c`, `src/tokens.h`):
+- Ragel-based state machine for token expansion
+- Stack-based style nesting with `{/}` pop operation
+- Full color palette support (standard, bright, 256-color)
+- Control sequences for cursor and screen management
+
 **Utilities** (`src/utils.c`, `src/utils.h`):
-- Token expansion: Replaces `{b}`, `{reset}`, etc. with ANSI codes via `zstr_expand_tokens()`
 - Path utilities: `join_path()`, `mkdir_p()`, directory existence checks
 - Time formatting: `format_relative_time()` for human-readable timestamps
 - `AUTO_FREE` macro: Cleanup helper for raw pointers using `Z_CLEANUP()`
@@ -108,45 +113,57 @@ Manual cleanup still required in some cases:
 
 ### Token System
 
-The UI uses a token-based formatting system for dynamic styling. Tokens are placeholder strings embedded in text that get expanded to ANSI escape codes via `zstr_expand_tokens()` in `src/utils.c`. This allows formatting to be defined declaratively without hardcoding ANSI sequences throughout the codebase.
+The UI uses a stack-based token formatting system implemented with [Ragel](https://www.colm.net/open-source/ragel/). Tokens are placeholder strings embedded in text that get expanded to ANSI escape codes via `zstr_expand_tokens()`. This allows formatting to be defined declaratively without hardcoding ANSI sequences throughout the codebase.
+
+**Implementation**: `src/tokens.rl` (Ragel source) generates `src/tokens.c`
 
 **Documentation**: See `spec/token_system.md` for complete token specifications and usage patterns.
 
+**Stack Semantics**: Each style token pushes its previous state onto a stack. `{/}` pops one level, restoring the previous state. This enables proper nesting of styles.
+
+**Key Features:**
+- **Deferred Emission**: ANSI codes only emit when an actual character is printed
+- **Redundancy Avoidance**: Repeated identical styles don't emit duplicate codes
+- **Auto-Reset at Newlines**: All styles automatically reset before each newline
+
 **Available Tokens:**
 
-| Token | ANSI Code | Description |
-|-------|-----------|-------------|
-| `{h1}` | Bold + Orange (38;5;214m) | Primary headings |
-| `{h2}` | Bold + Blue | Secondary headings |
-| `{b}` | Bold + Yellow | Bold/highlighted text, fuzzy matches |
-| `{/b}` | Reset bold and foreground | End bold formatting and reset color |
-| `{dim}` | Bright black (gray, 90m) | Dimmed/secondary text |
-| `{text}` | Reset | Normal text (full reset) |
-| `{reset}` | Reset | Full reset of all formatting |
-| `{/fg}` | Reset foreground | Reset foreground color only |
-| `{section}` | Bold | Start of selected section |
-| `{/section}` | Reset | End of selected section |
-
-**ANSI Constants** (defined in `src/utils.h`):
-- `ANSI_RESET` - "\033[0m"
-- `ANSI_BOLD` - "\033[1m"
-- `ANSI_DIM` - "\033[2m"
-- `ANSI_RED`, `ANSI_GREEN`, `ANSI_YELLOW`, `ANSI_BLUE`, `ANSI_MAGENTA`, `ANSI_CYAN`, `ANSI_WHITE`
+| Category | Tokens |
+|----------|--------|
+| **Semantic** | `{b}` (bold), `{highlight}` (bold+yellow), `{h1}` (bold+orange), `{h2}` (bold+blue), `{dim}` (gray), `{section}` (bold), `{danger}` (red bg) |
+| **Attributes** | `{bold}` `{B}`, `{italic}` `{I}`, `{underline}` `{U}`, `{reverse}`, `{strikethrough}`, `{strike}` |
+| **Colors** | `{red}`, `{green}`, `{blue}`, `{yellow}`, `{cyan}`, `{magenta}`, `{white}`, `{black}`, `{gray}`/`{grey}` |
+| **Bright Colors** | `{bright:red}`, `{bright:green}`, etc. |
+| **256-Color** | `{fg:N}`, `{bg:N}` where N is 0-255 |
+| **Background** | `{bg:red}`, `{bg:green}`, etc. |
+| **Reset/Pop** | `{/}` (pop), `{/name}` (e.g., `{/highlight}`), `{reset}` (full reset), `{/fg}`, `{/bg}` |
+| **Control** | `{clr}` (clear line), `{cls}` (clear screen), `{home}`, `{hide}`, `{show}` |
+| **Special** | `{cursor}` (cursor position tracking) |
 
 **Usage Pattern:**
 ```c
-Z_CLEANUP(zstr_free) zstr message = zstr_from("Status: {b}OK{/b}");
-Z_CLEANUP(zstr_free) zstr expanded = zstr_expand_tokens(zstr_cstr(&message));
-printf("%s\n", zstr_cstr(&expanded));
+// Simple formatting
+Z_CLEANUP(zstr_free) zstr result = zstr_expand_tokens("Status: {b}OK{/}");
+
+// Nested styles (stack-based)
+Z_CLEANUP(zstr_free) zstr result = zstr_expand_tokens("{bold}Bold {red}and red{/} just bold{/} normal");
+
+// 256-color support
+Z_CLEANUP(zstr_free) zstr result = zstr_expand_tokens("{fg:214}Orange text{/}");
 ```
 
 **In Fuzzy Matching:**
-The fuzzy matching system in `src/fuzzy.c` inserts `{b}` tokens around matched characters. These tokens are preserved through the rendering pipeline and expanded to ANSI codes when displayed:
+The fuzzy matching system in `src/fuzzy.c` inserts `{highlight}` tokens around matched characters. These tokens are preserved through the rendering pipeline and expanded to ANSI codes when displayed:
 
 ```c
 // Input: "2025-11-29-test", query: "te"
-// Output: "2025-11-29-{b}te{/b}st"
+// Output: "2025-11-29-{highlight}te{/}st"
 // Displayed: "2025-11-29-[bold yellow]te[reset]st"
+```
+
+**Regenerating Token Parser:**
+```bash
+ragel -C -G2 src/tokens.rl -o src/tokens.c
 ```
 
 ## Configuration
@@ -218,9 +235,11 @@ Z_CLEANUP(zstr_free) zstr expanded = zstr_expand_tokens(zstr_cstr(&formatted));
 External dependencies are minimal:
 - Standard C library (POSIX)
 - Math library (`-lm` for fuzzy scoring)
-- No external libraries beyond libc
+- Ragel (`ragel`) - only needed if modifying `src/tokens.rl`
 
 The `src/libs/` directory contains bundled single-header libraries (zstr, zvec, zlist) that are self-contained.
+
+Note: The generated `src/tokens.c` is checked into the repository, so Ragel is only required when modifying the token system.
 
 ## Directory Structure
 
@@ -239,7 +258,9 @@ The `src/libs/` directory contains bundled single-header libraries (zstr, zvec, 
 - `src/main.c` - Entry point, argument parsing
 - `src/tui.c` - Interactive selector implementation
 - `src/fuzzy.c` - Scoring and highlighting logic
-- `src/utils.c` - Shared utilities, token expansion
+- `src/tokens.rl` - Token system (Ragel source)
+- `src/tokens.c` - Token system (generated, do not edit)
+- `src/utils.c` - Shared utilities
 - `src/commands.c` - Command implementations, shell emission
 - `Makefile` - Build configuration
 - `docs/try.reference.rb` - Ruby reference implementation (source of truth for features)
@@ -248,9 +269,11 @@ The `src/libs/` directory contains bundled single-header libraries (zstr, zvec, 
 
 **IMPORTANT**: When making changes to certain subsystems, their corresponding documentation files must be updated:
 
-- **Token expansion** (`src/utils.c`, `zstr_expand_tokens()`):
+- **Token system** (`src/tokens.rl`):
   - Update `spec/token_system.md` with any new tokens or changed ANSI codes
   - Update the token table in this file (CLAUDE.md)
+  - Update `src/tokens.h` header documentation
+  - Regenerate C code: `ragel -C -G2 src/tokens.rl -o src/tokens.c`
 
 - **Fuzzy matching algorithm** (`src/fuzzy.c`, `fuzzy_match()`):
   - Update `spec/fuzzy_matching.md` with algorithm changes
