@@ -15,6 +15,7 @@ jobs:
           - os: linux
             arch: x86_64
             runner: ubuntu-latest
+            full_test: true
 
           - os: linux
             arch: aarch64
@@ -46,4 +47,4 @@ jobs:
       run: make
 
     - name: Run tests
-      run: make test
+      run: make ${{ matrix.full_test && 'test' || 'test-fast' }}
