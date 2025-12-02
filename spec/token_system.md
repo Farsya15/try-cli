@@ -52,7 +52,7 @@ All active styles are automatically reset before each newline character. This en
 | `{h3}` - `{h6}` | Bold + white | `\033[1;37m` |
 | `{strong}` | Bold | `\033[1m` |
 | `{dim}` | Gray foreground (bright black) | `\033[90m` |
-| `{section}` | Bold only | `\033[1m` |
+| `{section}` | Bold + dark gray background (for selection highlight) | `\033[1;48;5;237m` |
 | `{danger}` | Dark red background (for warnings/deletions) | `\033[48;5;52m` |
 | `{strike}` | Legacy alias for `{danger}` | `\033[48;5;52m` |
 | `{text}` | Full reset | `\033[0m` |
@@ -139,6 +139,8 @@ Standard colors:
 | `{home}` | Move cursor to home | `\033[H` |
 | `{hide}` | Hide cursor | `\033[?25l` |
 | `{show}` | Show cursor | `\033[?25h` |
+| `{goto:row,col}` | Move cursor to position | `\033[row;colH` |
+| `{goto_cursor}` | Move cursor to `{cursor}` marker position | `\033[row;colH` |
 
 ### Special Tokens
 

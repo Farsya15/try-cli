@@ -12,7 +12,7 @@
  *   {h1}-{h6}   - Heading styles (default: h1=orange, h2=blue, h3-h6=white)
  *   {strong}    - Strong/bold text
  *   {dim}       - Gray foreground (bright black)
- *   {section}   - Bold only, for selected sections
+ *   {section}   - Bold + dark gray background, for selection highlighting
  *   {danger}    - Dark red background (for warnings/deletions)
  *   {strike}    - Strikethrough text (alias for {strikethrough})
  *   {text}      - Full reset (alias for {reset})
@@ -50,6 +50,8 @@
  *   {home}              - Move cursor to home position (ESC[H)
  *   {hide}              - Hide cursor (ESC[?25l)
  *   {show}              - Show cursor (ESC[?25h)
+ *   {goto:row,col}      - Move cursor to position (ESC[row;colH)
+ *   {goto_cursor}       - Move cursor to {cursor} marker position
  *
  * SPECIAL:
  *   {cursor}            - Mark cursor position (for cursor tracking)
@@ -100,34 +102,59 @@ extern const char *token_style_danger;    /* Default: "48;5;52" (dark red bg) */
 extern bool zstr_disable_token_expansion;  /* If true, pass through unchanged */
 extern bool zstr_no_colors;                /* If true, tokens expand to empty strings */
 
-/* Result of token expansion with cursor position tracking */
+/* Result of token expansion with state tracking */
 typedef struct {
     zstr expanded;    /* The expanded string with ANSI codes */
-    int cursor_pos;   /* Visual column of {cursor} marker, or -1 if not found */
+    int cursor_col;   /* Visual column of {cursor} marker (1-indexed), or -1 if not found */
+    int cursor_row;   /* Visual row of {cursor} marker (1-indexed), or -1 if not found */
+    bool has_cursor;  /* True if {cursor} was found in the input */
+    int final_col;    /* Final visual column after expansion */
+    int final_row;    /* Final visual row after expansion */
 } TokenExpansion;
 
 /*
  * Core expansion functions (operate on C strings)
  */
 
-/* Expand tokens, returning both expanded string and cursor position */
+/* Expand tokens, returning expanded string and state */
 TokenExpansion expand_tokens_with_cursor(const char *text);
 
 /* Expand tokens, returning just the expanded string */
 zstr expand_tokens(const char *text);
 
+/* Free a TokenExpansion (just frees the expanded zstr) */
+static inline void token_expansion_free(TokenExpansion *te) {
+    zstr_free(&te->expanded);
+}
+
 /*
  * zstr wrapper functions (for convenience when working with zstr)
  */
 
-/* Expand tokens from zstr, returning both expanded string and cursor position */
+/* Expand tokens from C string, returning expanded string and state */
 static inline TokenExpansion zstr_expand_tokens_with_cursor(const char *text) {
     return expand_tokens_with_cursor(text);
 }
 
-/* Expand tokens from zstr, returning just the expanded string */
+/* Expand tokens from C string, returning just the expanded string */
 static inline zstr zstr_expand_tokens(const char *text) {
     return expand_tokens(text);
 }
+
+/*
+ * Direct output functions - expand tokens and write directly to stream
+ */
+
+#include <stdio.h>
+
+/* Expand tokens and write to FILE* stream (e.g., stdout, stderr) */
+void zstr_expand_to(FILE *stream, const char *text);
+
+/*
+ * Render a TokenExpansion to a stream.
+ * If has_cursor is true, appends {goto_cursor}{show} and clears to end of line.
+ * This provides a complete render with proper cursor positioning.
+ */
+void token_expansion_render(FILE *stream, TokenExpansion *te);
 
 #endif /* TOKENS_H */

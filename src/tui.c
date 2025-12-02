@@ -352,8 +352,7 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
   bool is_test = (mode && mode->inject_keys);
 
   while (1) {
-    WRITE(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
-    WRITE(STDERR_FILENO, "\x1b[H", 3);    // Home
+    zstr_expand_to(stderr, "{hide}{home}");
 
     // Title
     Z_CLEANUP(zstr_free) zstr title = zstr_from("{b}Delete ");
@@ -362,10 +361,8 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     zstr_cat(&title, count_str);
     zstr_cat(&title, " director");
     zstr_cat(&title, marked_items.length == 1 ? "y" : "ies");
-    zstr_cat(&title, "?{/b}\x1b[K\n\x1b[K\n");
-
-    Z_CLEANUP(zstr_free) zstr title_exp = zstr_expand_tokens(zstr_cstr(&title));
-    WRITE(STDERR_FILENO, zstr_cstr(&title_exp), zstr_len(&title_exp));
+    zstr_cat(&title, "?{/b}{clr}\n{clr}\n");
+    zstr_expand_to(stderr, zstr_cstr(&title));
 
     // List items (max 10)
     int max_show = 10;
@@ -373,24 +370,18 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     for (int i = 0; i < max_show; i++) {
       Z_CLEANUP(zstr_free) zstr item = zstr_from("  {dim}-{reset} ");
       zstr_cat(&item, zstr_cstr(&marked_items.data[i]->name));
-      zstr_cat(&item, "\x1b[K\n");
-      Z_CLEANUP(zstr_free) zstr item_exp = zstr_expand_tokens(zstr_cstr(&item));
-      WRITE(STDERR_FILENO, zstr_cstr(&item_exp), zstr_len(&item_exp));
+      zstr_cat(&item, "{clr}\n");
+      zstr_expand_to(stderr, zstr_cstr(&item));
     }
     if ((int)marked_items.length > max_show) {
-      char more[64];
-      snprintf(more, sizeof(more), "  {dim}...and %zu more{reset}\x1b[K\n",
+      char more[80];
+      snprintf(more, sizeof(more), "  {dim}...and %zu more{reset}{clr}\n",
                marked_items.length - max_show);
-      Z_CLEANUP(zstr_free) zstr more_exp = zstr_expand_tokens(more);
-      WRITE(STDERR_FILENO, zstr_cstr(&more_exp), zstr_len(&more_exp));
+      zstr_expand_to(stderr, more);
     }
 
-    // Prompt - track line for cursor positioning
-    // Line 1: title, Line 2: blank, Lines 3..3+items-1: items, then blank, then prompt
-    // So prompt is at line: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 = 4 + items
-    int prompt_line = 4 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
-
-    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/}{highlight}YES{/}{dim} to confirm:{reset} ");
+    // Prompt
+    Z_CLEANUP(zstr_free) zstr prompt = zstr_from("{clr}\n{dim}Type {/}{highlight}YES{/}{dim} to confirm:{reset} ");
 
     const char *confirm_cstr = zstr_cstr(&confirm_input);
     int confirm_len = (int)zstr_len(&confirm_input);
@@ -404,21 +395,11 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     zstr_cat_len(&prompt, confirm_cstr, cursor);
     zstr_cat(&prompt, "{cursor}");
     zstr_cat_len(&prompt, confirm_cstr + cursor, confirm_len - cursor);
+    zstr_cat(&prompt, "\n{cls}");
 
-    zstr_cat(&prompt, "\x1b[K");
-
-    TokenExpansion prompt_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&prompt));
-    int prompt_col = prompt_exp.cursor_pos;
-    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp.expanded), zstr_len(&prompt_exp.expanded));
-    zstr_free(&prompt_exp.expanded);
-
-    WRITE(STDERR_FILENO, "\n\x1b[J", 4); // Newline then clear rest
-
-    // Position cursor on prompt line after input
-    char cursor_pos[32];
-    snprintf(cursor_pos, sizeof(cursor_pos), "\x1b[%d;%dH", prompt_line, prompt_col);
-    WRITE(STDERR_FILENO, cursor_pos, strlen(cursor_pos));
-    WRITE(STDERR_FILENO, "\x1b[?25h", 6); // Show cursor
+    TokenExpansion te = zstr_expand_tokens_with_cursor(zstr_cstr(&prompt));
+    token_expansion_render(stderr, &te);
+    token_expansion_free(&te);
 
     // Read key
     int c;
@@ -473,8 +454,7 @@ static void render(const char *base_path) {
   int rows, cols;
   get_window_size(&rows, &cols);
 
-  WRITE(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
-  WRITE(STDERR_FILENO, "\x1b[H", 3);    // Home
+  zstr_expand_to(stderr, "{hide}{home}");
 
   // Build separator line dynamically (handles any terminal width)
   Z_CLEANUP(zstr_free) zstr sep_line = zstr_init();
@@ -482,16 +462,13 @@ static void render(const char *base_path) {
     zstr_cat(&sep_line, "─");
 
   // Header
-  // Use AUTO_ZSTR for temp strings
   {
     Z_CLEANUP(zstr_free)
     zstr header_fmt =
-        zstr_from("{h1}📁 Try Directory Selection{reset}\x1b[K\n{dim}");
+        zstr_from("{h1}📁 Try Directory Selection{reset}{clr}\n{dim}");
     zstr_cat(&header_fmt, zstr_cstr(&sep_line));
-    zstr_cat(&header_fmt, "{reset}\x1b[K\n");
-
-    Z_CLEANUP(zstr_free) zstr header = zstr_expand_tokens(zstr_cstr(&header_fmt));
-    WRITE(STDERR_FILENO, zstr_cstr(&header), zstr_len(&header));
+    zstr_cat(&header_fmt, "{reset}{clr}\n");
+    zstr_expand_to(stderr, zstr_cstr(&header_fmt));
   }
 
   // Search bar - track cursor position
@@ -522,14 +499,14 @@ static void render(const char *base_path) {
       zstr_push(&search_fmt, filter_cstr[i]);
     }
 
-    zstr_cat(&search_fmt, "\x1b[K\n{dim}");
+    zstr_cat(&search_fmt, "{clr}\n{dim}");
     zstr_cat(&search_fmt, zstr_cstr(&sep_line));
-    zstr_cat(&search_fmt, "{reset}\x1b[K\n");
+    zstr_cat(&search_fmt, "{reset}{clr}\n");
 
     TokenExpansion search_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&search_fmt));
-    search_cursor_col = search_exp.cursor_pos;
-    WRITE(STDERR_FILENO, zstr_cstr(&search_exp.expanded), zstr_len(&search_exp.expanded));
-    zstr_free(&search_exp.expanded);
+    search_cursor_col = search_exp.cursor_col;
+    fwrite(zstr_cstr(&search_exp.expanded), 1, zstr_len(&search_exp.expanded), stderr);
+    token_expansion_free(&search_exp);
   }
 
   // List
@@ -603,19 +580,18 @@ static void render(const char *base_path) {
       bool is_marked = entry->marked_for_delete;
       if (is_selected) {
         if (is_marked) {
-          zstr_cat(&line, "{b}→ {/}🗑️ {danger}{section}");
+          zstr_cat(&line, "{section}{highlight}→ {/}🗑️ {danger}");
           zstr_cat(&line, zstr_cstr(&display_name));
-          zstr_cat(&line, "{/section}{/danger}");
+          zstr_cat(&line, "{/}");
         } else {
-          zstr_cat(&line, "{b}→ {/b}📁 {section}");
+          zstr_cat(&line, "{section}{highlight}→ {/}📁 ");
           zstr_cat(&line, zstr_cstr(&display_name));
-          zstr_cat(&line, "{/section}");
         }
       } else {
         if (is_marked) {
           zstr_cat(&line, "  🗑️ {danger}");
           zstr_cat(&line, zstr_cstr(&display_name));
-          zstr_cat(&line, "{/danger}");
+          zstr_cat(&line, "{/}");
         } else {
           zstr_cat(&line, "  📁 ");
           zstr_cat(&line, zstr_cstr(&display_name));
@@ -658,14 +634,12 @@ static void render(const char *base_path) {
         }
       }
 
-      zstr_cat(&line, "\x1b[K\n");
-
-      Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-      WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+      zstr_cat(&line, "{clr}\n");
+      zstr_expand_to(stderr, zstr_cstr(&line));
 
     } else if (idx == (int)filtered_ptrs.length && zstr_len(&filter_buffer) > 0) {
       // Add separator line before "Create new"
-      WRITE(STDERR_FILENO, "\x1b[K\n", 4);
+      zstr_expand_to(stderr, "{clr}\n");
       i++; // Skip next iteration since we used a line for separator
 
       // Generate preview of what the directory name will be
@@ -689,33 +663,29 @@ static void render(const char *base_path) {
 
       if (idx == selected_index) {
         Z_CLEANUP(zstr_free)
-        zstr line = zstr_from("{b}→ {/b}📂 Create new: {dim}");
+        zstr line = zstr_from("{section}{highlight}→ {/}📂 Create new: {dim}");
         zstr_cat(&line, zstr_cstr(&preview));
-        zstr_cat(&line, "{reset}\x1b[K\n");
-
-        Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-        WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+        zstr_cat(&line, "{/}{clr}\n");
+        zstr_expand_to(stderr, zstr_cstr(&line));
       } else {
         Z_CLEANUP(zstr_free)
         zstr line = zstr_from("  📂 Create new: {dim}");
         zstr_cat(&line, zstr_cstr(&preview));
-        zstr_cat(&line, "{reset}\x1b[K\n");
-
-        Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-        WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+        zstr_cat(&line, "{reset}{clr}\n");
+        zstr_expand_to(stderr, zstr_cstr(&line));
       }
     } else {
-      WRITE(STDERR_FILENO, "\x1b[K\n", 4);
+      zstr_expand_to(stderr, "{clr}\n");
     }
   }
 
-  WRITE(STDERR_FILENO, "\x1b[J", 3); // Clear rest
+  zstr_expand_to(stderr, "{cls}");
 
   // Footer
   {
     Z_CLEANUP(zstr_free) zstr footer_fmt = zstr_from("{dim}");
     zstr_cat(&footer_fmt, zstr_cstr(&sep_line));
-    zstr_cat(&footer_fmt, "{reset}\x1b[K\n");
+    zstr_cat(&footer_fmt, "{reset}{clr}\n");
 
     if (marked_count > 0) {
       // Delete mode footer
@@ -723,23 +693,22 @@ static void render(const char *base_path) {
       snprintf(count_str, sizeof(count_str), "%d", marked_count);
       zstr_cat(&footer_fmt, "{highlight}DELETE MODE{/} | ");
       zstr_cat(&footer_fmt, count_str);
-      zstr_cat(&footer_fmt, " marked | {dim}Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel{reset}\x1b[K\n");
+      zstr_cat(&footer_fmt, " marked | {dim}Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel{reset}{clr}\n");
     } else {
       // Normal footer
-      zstr_cat(&footer_fmt, "{dim}↑/↓: Navigate  Enter: Select  Ctrl-D: Delete  Esc: Cancel{reset}\x1b[K\n");
+      zstr_cat(&footer_fmt, "{dim}↑/↓: Navigate  Enter: Select  Ctrl-D: Delete  Esc: Cancel{reset}{clr}\n");
     }
 
-    Z_CLEANUP(zstr_free) zstr footer = zstr_expand_tokens(zstr_cstr(&footer_fmt));
-    WRITE(STDERR_FILENO, zstr_cstr(&footer), zstr_len(&footer));
+    // Position cursor in search field and show it
+    if (search_cursor_col >= 0) {
+      char goto_cmd[32];
+      snprintf(goto_cmd, sizeof(goto_cmd), "{goto:%d,%d}{show}", search_line, search_cursor_col);
+      zstr_cat(&footer_fmt, goto_cmd);
+    } else {
+      zstr_cat(&footer_fmt, "{show}");
+    }
+    zstr_expand_to(stderr, zstr_cstr(&footer_fmt));
   }
-
-  // Position cursor in search field and show it
-  if (search_cursor_col >= 0) {
-    char cursor_pos[32];
-    snprintf(cursor_pos, sizeof(cursor_pos), "\x1b[%d;%dH", search_line, search_cursor_col);
-    WRITE(STDERR_FILENO, cursor_pos, strlen(cursor_pos));
-  }
-  WRITE(STDERR_FILENO, "\x1b[?25h", 6); // Show cursor
 
   (void)base_path;
 }
@@ -920,7 +889,7 @@ SelectionResult run_selector(const char *base_path,
     // Reset terminal state
     disable_raw_mode();
     // Reset all attributes
-    fprintf(stderr, "\x1b[0m");
+    zstr_expand_to(stderr, "{reset}");
     fflush(stderr);
   }
 

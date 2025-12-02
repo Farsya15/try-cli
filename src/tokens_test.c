@@ -221,13 +221,15 @@ void test_256_color_bg(void) {
  */
 void test_cursor_tracking(void) {
     TokenExpansion te = expand_tokens_with_cursor("Hello {cursor}World");
-    
-    /* Cursor should be at position 7 (after "Hello ") */
-    TEST_CHECK_(te.cursor_pos == 7, "Expected cursor at 7, got %d", te.cursor_pos);
+
+    /* Cursor should be at column 7 (after "Hello "), row 1 */
+    TEST_CHECK_(te.cursor_col == 7, "Expected cursor_col at 7, got %d", te.cursor_col);
+    TEST_CHECK_(te.cursor_row == 1, "Expected cursor_row at 1, got %d", te.cursor_row);
+    TEST_CHECK_(te.has_cursor == true, "Expected has_cursor to be true");
     TEST_CHECK(contains(zstr_cstr(&te.expanded), "Hello"));
     TEST_CHECK(contains(zstr_cstr(&te.expanded), "World"));
-    
-    zstr_free(&te.expanded);
+
+    token_expansion_free(&te);
 }
 
 /*

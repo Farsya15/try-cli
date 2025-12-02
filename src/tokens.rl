@@ -65,8 +65,11 @@ typedef struct {
     zstr *out;              /* Output buffer */
     StackEntry stack[MAX_STACK_DEPTH];
     int stack_depth;
-    int cursor_pos;         /* Visual column (1-indexed), -1 if no cursor */
+    int cursor_col;         /* Visual column of {cursor} (1-indexed), -1 if no cursor */
+    int cursor_row;         /* Visual row of {cursor} (1-indexed), -1 if no cursor */
+    bool has_cursor;        /* True if {cursor} was encountered */
     int visual_col;         /* Current visual column */
+    int visual_row;         /* Current visual row */
     bool no_colors;         /* If true, don't emit ANSI codes */
     bool disabled;          /* If true, pass through without expansion */
 
@@ -499,9 +502,12 @@ static void apply_token_dim_style(TokenParser *p) {
 }
 
 static void apply_token_section(TokenParser *p) {
-    /* {section} = bold only */
+    /* {section} = bold + subtle dark gray background (256-color 237) */
     push_attr(p, ATTR_BOLD, p->bold);
+    push_attr(p, ATTR_BG, p->bg_color);
+    push_composite(p, 2);
     p->bold = true;
+    p->bg_color = 2237; /* 256-color marker for 237 */
     mark_dirty(p);
 }
 
@@ -559,10 +565,20 @@ static int parse_number(const char *start, const char *end) {
     action handle_newline {
         zstr_push(parser.out, *p);
         parser.visual_col = 1;
+        parser.visual_row++;
     }
 
     action cursor_mark {
-        parser.cursor_pos = parser.visual_col;
+        parser.cursor_col = parser.visual_col;
+        parser.cursor_row = parser.visual_row;
+        parser.has_cursor = true;
+    }
+
+    action emit_goto_cursor {
+        if (parser.cursor_row > 0 && parser.cursor_col > 0) {
+            emit_ansi_num(&parser, "\033[", parser.cursor_row, ";");
+            emit_ansi_num(&parser, "", parser.cursor_col, "H");
+        }
     }
 
     action pop_style { pop_style(&parser); }
@@ -726,11 +742,27 @@ static int parse_number(const char *start, const char *end) {
     action emit_hide_cursor { emit_ansi(&parser, "\033[?25l"); }
     action emit_show_cursor { emit_ansi(&parser, "\033[?25h"); }
 
+    # Cursor positioning: {goto:row,col}
+    action mark_row_start { goto_row_start = p; }
+    action mark_row_end { goto_row_end = p; }
+    action mark_col_start { goto_col_start = p; }
+    action mark_col_end { goto_col_end = p; }
+    action emit_goto {
+        int row = parse_number(goto_row_start, goto_row_end);
+        int col = parse_number(goto_col_start, goto_col_end);
+        if (row >= 0 && col >= 0) {
+            emit_ansi_num(&parser, "\033[", row, ";");
+            emit_ansi_num(&parser, "", col, "H");
+        }
+    }
+
     tok_clear_line = "{clr}" %emit_clear_line;
     tok_clear_screen = "{cls}" %emit_clear_screen;
     tok_home = "{home}" %emit_home;
     tok_hide_cursor = "{hide}" %emit_hide_cursor;
     tok_show_cursor = "{show}" %emit_show_cursor;
+    tok_goto = "{goto:" (num_char+ >mark_row_start %mark_row_end) "," (num_char+ >mark_col_start %mark_col_end) "}" %emit_goto;
+    tok_goto_cursor = "{goto_cursor}" %emit_goto_cursor;
 
     # All tokens combined
     token = (
@@ -791,7 +823,9 @@ static int parse_number(const char *start, const char *end) {
         tok_clear_screen |
         tok_home |
         tok_hide_cursor |
-        tok_show_cursor
+        tok_show_cursor |
+        tok_goto |
+        tok_goto_cursor
     );
 
     # Helper action to emit the matched token text
@@ -857,9 +891,13 @@ bool zstr_disable_token_expansion = false;
 bool zstr_no_colors = false;
 
 TokenExpansion expand_tokens_with_cursor(const char *text) {
-    TokenExpansion result;
+    TokenExpansion result = {0};
     result.expanded = zstr_init();
-    result.cursor_pos = -1;
+    result.cursor_col = -1;
+    result.cursor_row = -1;
+    result.has_cursor = false;
+    result.final_col = 1;
+    result.final_row = 1;
 
     if (!text || !*text) {
         return result;
@@ -879,8 +917,10 @@ TokenExpansion expand_tokens_with_cursor(const char *text) {
     /* Initialize parser state */
     TokenParser parser = {0};
     parser.out = &result.expanded;
-    parser.cursor_pos = -1;
+    parser.cursor_col = -1;
+    parser.cursor_row = -1;
     parser.visual_col = 1;
+    parser.visual_row = 1;
     parser.no_colors = zstr_no_colors;
 
     /* Ragel variables */
@@ -893,9 +933,17 @@ TokenExpansion expand_tokens_with_cursor(const char *text) {
     const char *te = NULL;  /* Token end */
     const char *tok_start = NULL;
     const char *tok_end = NULL;
+    const char *goto_row_start = NULL;
+    const char *goto_row_end = NULL;
+    const char *goto_col_start = NULL;
+    const char *goto_col_end = NULL;
 
     (void)tok_start;
     (void)tok_end;
+    (void)goto_row_start;
+    (void)goto_row_end;
+    (void)goto_col_start;
+    (void)goto_col_end;
     (void)eof;
     (void)ts;
     (void)te;
@@ -905,11 +953,42 @@ TokenExpansion expand_tokens_with_cursor(const char *text) {
     %% write init;
     %% write exec;
 
-    result.cursor_pos = parser.cursor_pos;
+    result.cursor_col = parser.cursor_col;
+    result.cursor_row = parser.cursor_row;
+    result.has_cursor = parser.has_cursor;
+    result.final_col = parser.visual_col;
+    result.final_row = parser.visual_row;
     return result;
 }
 
 zstr expand_tokens(const char *text) {
     TokenExpansion result = expand_tokens_with_cursor(text);
     return result.expanded;
+}
+
+void zstr_expand_to(FILE *stream, const char *text) {
+    if (!text || !*text) return;
+
+    Z_CLEANUP(zstr_free) zstr expanded = expand_tokens(text);
+    fwrite(zstr_cstr(&expanded), 1, zstr_len(&expanded), stream);
+}
+
+void token_expansion_render(FILE *stream, TokenExpansion *te) {
+    if (!te) return;
+
+    /* Write the expanded content */
+    fwrite(zstr_cstr(&te->expanded), 1, zstr_len(&te->expanded), stream);
+
+    /* If cursor was marked, clear to end of line and position cursor */
+    if (te->has_cursor) {
+        /* Clear from current position to end of line (gives cursor room) */
+        if (!zstr_no_colors) {
+            fprintf(stream, "\033[K");
+        }
+
+        /* Position cursor at marked location and show it */
+        if (!zstr_no_colors && te->cursor_row > 0 && te->cursor_col > 0) {
+            fprintf(stream, "\033[%d;%dH\033[?25h", te->cursor_row, te->cursor_col);
+        }
+    }
 }
