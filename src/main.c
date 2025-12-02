@@ -48,10 +48,30 @@ static void print_help(void) {
   fprintf(stderr, "%s", zstr_cstr(&expanded));
 }
 
+// Parse a --flag=value or --flag value option, returns value or NULL
+// Sets *skip to 1 if value was in next arg (so caller can skip it)
+static const char *parse_option_value(const char *arg, const char *next_arg,
+                                       const char *flag, int *skip) {
+  size_t flag_len = strlen(flag);
+  *skip = 0;
+
+  // Check --flag=value form
+  if (strncmp(arg, flag, flag_len) == 0 && arg[flag_len] == '=') {
+    return arg + flag_len + 1;
+  }
+
+  // Check --flag value form
+  if (strcmp(arg, flag) == 0 && next_arg != NULL) {
+    *skip = 1;
+    return next_arg;
+  }
+
+  return NULL;
+}
+
 int main(int argc, char **argv) {
   Z_CLEANUP(zstr_free) zstr tries_path = zstr_init();
-  AUTO_FREE char **cmd_argv = NULL;
-  int cmd_argc = 0;
+  Z_CLEANUP(vec_free_char_ptr) vec_char_ptr cmd_args = vec_init_capacity_char_ptr(argc);
 
   // Check NO_COLOR environment variable (https://no-color.org/)
   if (getenv("NO_COLOR") != NULL) {
@@ -61,37 +81,50 @@ int main(int argc, char **argv) {
   // Mode configuration
   Mode mode = {.type = MODE_DIRECT};
 
-  // Simple arg parsing
-  cmd_argv = malloc(sizeof(char *) * (size_t)argc);
-
+  // Parse arguments - options can appear anywhere
   for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--path") == 0 && i + 1 < argc) {
-      zstr_free(&tries_path);
-      tries_path = zstr_from(argv[i + 1]);
-      i++;
-    } else if (strncmp(argv[i], "--path=", 7) == 0) {
-      zstr_free(&tries_path);
-      tries_path = zstr_from(argv[i] + 7);
-    } else if (strcmp(argv[i], "--and-exit") == 0) {
-      mode.render_once = true;
-    } else if (strcmp(argv[i], "--and-keys") == 0 && i + 1 < argc) {
-      mode.inject_keys = argv[i + 1];
-      i++;
-    } else if (strncmp(argv[i], "--and-keys=", 11) == 0) {
-      mode.inject_keys = argv[i] + 11;
-    } else if (strcmp(argv[i], "--no-expand-tokens") == 0) {
-      zstr_disable_token_expansion = true;
-    } else if (strcmp(argv[i], "--no-colors") == 0) {
-      zstr_no_colors = true;
-    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+    const char *arg = argv[i];
+    const char *next = (i + 1 < argc) ? argv[i + 1] : NULL;
+    const char *value;
+    int skip = 0;
+
+    // Boolean flags
+    if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
       print_help();
       return 0;
-    } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+    }
+    if (strcmp(arg, "--version") == 0 || strcmp(arg, "-v") == 0) {
       printf("try %s\n", TRY_VERSION);
       return 0;
-    } else {
-      cmd_argv[cmd_argc++] = argv[i];
     }
+    if (strcmp(arg, "--no-colors") == 0) {
+      zstr_no_colors = true;
+      continue;
+    }
+    if (strcmp(arg, "--no-expand-tokens") == 0) {
+      zstr_disable_token_expansion = true;
+      continue;
+    }
+    if (strcmp(arg, "--and-exit") == 0) {
+      mode.render_once = true;
+      continue;
+    }
+
+    // Options with values
+    if ((value = parse_option_value(arg, next, "--path", &skip))) {
+      zstr_free(&tries_path);
+      tries_path = zstr_from(value);
+      i += skip;
+      continue;
+    }
+    if ((value = parse_option_value(arg, next, "--and-keys", &skip))) {
+      mode.inject_keys = value;
+      i += skip;
+      continue;
+    }
+
+    // Positional argument
+    vec_push_char_ptr(&cmd_args, argv[i]);
   }
 
   // Default tries path
@@ -115,35 +148,35 @@ int main(int argc, char **argv) {
   }
 
   // No command = show help (direct mode)
-  if (cmd_argc == 0) {
+  if (cmd_args.length == 0) {
     print_help();
     return 0;
   }
 
-  const char *command = cmd_argv[0];
+  const char *command = *vec_at_char_ptr(&cmd_args, 0);
 
   // Route commands
   if (strcmp(command, "init") == 0) {
-    cmd_init(cmd_argc - 1, cmd_argv + 1, path_cstr);
+    cmd_init((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr);
     return 0;
   } else if (strcmp(command, "exec") == 0) {
     // Exec mode
     mode.type = MODE_EXEC;
-    return cmd_exec(cmd_argc - 1, cmd_argv + 1, path_cstr, &mode);
+    return cmd_exec((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
   } else if (strcmp(command, "cd") == 0) {
     // Direct mode cd (interactive selector)
-    return cmd_selector(cmd_argc - 1, cmd_argv + 1, path_cstr, &mode);
+    return cmd_selector((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
   } else if (strcmp(command, "clone") == 0) {
     // Direct mode clone
-    return cmd_clone(cmd_argc - 1, cmd_argv + 1, path_cstr, &mode);
+    return cmd_clone((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
   } else if (strcmp(command, "worktree") == 0) {
     // Direct mode worktree
-    return cmd_worktree(cmd_argc - 1, cmd_argv + 1, path_cstr, &mode);
+    return cmd_worktree((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
   } else if (strncmp(command, "https://", 8) == 0 ||
              strncmp(command, "http://", 7) == 0 ||
              strncmp(command, "git@", 4) == 0) {
     // URL shorthand for clone: try <url> = try clone <url>
-    return cmd_clone(cmd_argc, cmd_argv, path_cstr, &mode);
+    return cmd_clone((int)cmd_args.length, cmd_args.data, path_cstr, &mode);
   } else {
     // Unknown command - show help
     fprintf(stderr, "Unknown command: %s\n\n", command);

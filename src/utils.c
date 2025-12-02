@@ -186,31 +186,31 @@ bool file_exists(const char *path) {
 }
 
 int mkdir_p(const char *path) {
-  // System call is easiest for mkdir -p equivalent in portable C without
-  // libraries But let's try to do it manually or just use system("mkdir -p
-  // ...") for simplicity in this task? The requirement is "dependency free
-  // modern c project". calling system() is standard C. However, implementing it
-  // is better.
+  Z_CLEANUP(zstr_free) zstr tmp = zstr_from(path);
+  
+  // Remove trailing slash
+  if (zstr_len(&tmp) > 0) {
+      char *data = zstr_data(&tmp);
+      if (data[zstr_len(&tmp) - 1] == '/') {
+          zstr_pop_char(&tmp);
+      }
+  }
 
-  char tmp[1024];
-  char *p = NULL;
-  size_t len;
+  char *p_start = zstr_data(&tmp);
+  // Start after the first char to avoid stopping at root /
+  char *p = p_start + 1;
 
-  snprintf(tmp, sizeof(tmp), "%s", path);
-  len = strlen(tmp);
-  if (tmp[len - 1] == '/')
-    tmp[len - 1] = 0;
-
-  for (p = tmp + 1; *p; p++) {
+  while (*p) {
     if (*p == '/') {
       *p = 0;
-      if (mkdir(tmp, S_IRWXU) != 0 && errno != EEXIST) {
+      if (mkdir(p_start, S_IRWXU) != 0 && errno != EEXIST) {
         return -1;
       }
       *p = '/';
     }
+    p++;
   }
-  if (mkdir(tmp, S_IRWXU) != 0 && errno != EEXIST) {
+  if (mkdir(p_start, S_IRWXU) != 0 && errno != EEXIST) {
     return -1;
   }
   return 0;
@@ -231,4 +231,70 @@ zstr format_relative_time(time_t mtime) {
     zstr_fmt(&s, "%dd ago", (int)(diff / 86400));
   }
   return s;
+}
+
+// Check if a character is valid for directory names
+// Valid: alphanumeric, underscore, hyphen, dot
+static bool is_valid_dir_char(char c) {
+  return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.';
+}
+
+// Check if name contains only valid directory name characters
+// (after normalization, so no spaces)
+bool is_valid_dir_name(const char *name) {
+  if (!name || !*name) return false;
+
+  for (const char *p = name; *p; p++) {
+    if (!is_valid_dir_char(*p) && *p != ' ') {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Normalize directory name:
+// - Convert spaces to hyphens
+// - Collapse multiple consecutive hyphens to single hyphen
+// - Strip leading/trailing hyphens and spaces
+// - Return empty string if invalid characters found
+zstr normalize_dir_name(const char *name) {
+  zstr result = zstr_init();
+  if (!name || !*name) return result;
+
+  // First pass: check for invalid characters
+  for (const char *p = name; *p; p++) {
+    char c = *p;
+    if (!is_valid_dir_char(c) && !isspace((unsigned char)c)) {
+      // Invalid character found - return empty string
+      return result;
+    }
+  }
+
+  // Second pass: normalize
+  bool last_was_hyphen = true;  // Start true to strip leading hyphens/spaces
+  for (const char *p = name; *p; p++) {
+    char c = *p;
+    if (isspace((unsigned char)c) || c == '-') {
+      // Convert space to hyphen, collapse multiple hyphens
+      if (!last_was_hyphen) {
+        zstr_push(&result, '-');
+        last_was_hyphen = true;
+      }
+    } else {
+      zstr_push(&result, c);
+      last_was_hyphen = false;
+    }
+  }
+
+  // Strip trailing hyphen
+  while (zstr_len(&result) > 0) {
+    char *data = zstr_data(&result);
+    if (data[zstr_len(&result) - 1] == '-') {
+      zstr_pop_char(&result);
+    } else {
+      break;
+    }
+  }
+
+  return result;
 }

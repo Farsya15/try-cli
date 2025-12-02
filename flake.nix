@@ -78,9 +78,9 @@
 
           meta = with pkgs.lib; {
             description = "Fresh directories for every vibe - C implementation";
-            homepage = "https://github.com/tobi/try-c";
+            homepage = "https://github.com/tobi/try-cli";
             license = licenses.mit;
-            maintainers = [ ];
+            maintainers = [ "tobi@shopify.com" ];
             platforms = platforms.unix;
           };
         };

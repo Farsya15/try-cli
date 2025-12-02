@@ -217,7 +217,7 @@ static zstr build_clone_script(const char *url, const char *path) {
   return script;
 }
 
-static zstr build_delete_script(const char *base_path, char **names, size_t count) {
+static zstr build_delete_script(const char *base_path, vec_zstr *names) {
   zstr script = zstr_init();
 
   // Get current working directory for PWD restoration
@@ -231,8 +231,9 @@ static zstr build_delete_script(const char *base_path, char **names, size_t coun
   zstr_fmt(&script, "cd %s && \\\n", zstr_cstr(&escaped_base));
 
   // Per-item delete commands
-  for (size_t i = 0; i < count; i++) {
-    Z_CLEANUP(zstr_free) zstr escaped_name = shell_escape(names[i]);
+  zstr *iter;
+  vec_foreach(names, iter) {
+    Z_CLEANUP(zstr_free) zstr escaped_name = shell_escape(zstr_cstr(iter));
     zstr_fmt(&script, "  [[ -d %s ]] && rm -rf %s && \\\n",
              zstr_cstr(&escaped_name), zstr_cstr(&escaped_name));
   }
@@ -253,8 +254,11 @@ static zstr build_delete_script(const char *base_path, char **names, size_t coun
 // ============================================================================
 
 void cmd_init(int argc, char **argv, const char *tries_path) {
-  // If a path argument is provided, use it instead of the default
-  if (argc > 0 && argv[0] != NULL) {
+  (void)argc; (void)argv; // May be used for future options
+
+  // If a positional argument is provided, use it as the tries path
+  // e.g., "try init /tmp/custom-path"
+  if (argc > 0 && argv[0] && argv[0][0] != '-') {
     tries_path = argv[0];
   }
 
@@ -354,27 +358,34 @@ static zstr build_worktree_script(const char *worktree_path) {
 
 static bool is_in_git_repo(void) {
   // Check if .git exists in current directory or any parent
-  char cwd[1024];
+  char cwd[4096];
   if (getcwd(cwd, sizeof(cwd)) == NULL) return false;
 
-  char path[1024];
-  strncpy(path, cwd, sizeof(path) - 1);
-  path[sizeof(path) - 1] = '\0';
+  Z_CLEANUP(zstr_free) zstr path = zstr_from(cwd);
 
-  while (strlen(path) > 0) {
-    char git_path[1100];
-    snprintf(git_path, sizeof(git_path), "%s/.git", path);
-    if (access(git_path, F_OK) == 0) return true;
+  while (zstr_len(&path) > 0) {
+    Z_CLEANUP(zstr_free) zstr git_path = zstr_dup(&path);
+    zstr_cat(&git_path, "/.git");
+    
+    if (access(zstr_cstr(&git_path), F_OK) == 0) return true;
 
     // Go up one directory
-    char *last_slash = strrchr(path, '/');
-    if (last_slash == path) {
+    char *p = zstr_data(&path);
+    char *last_slash = strrchr(p, '/');
+    
+    if (last_slash == p) {
       // At root
-      snprintf(git_path, sizeof(git_path), "/.git");
-      return access(git_path, F_OK) == 0;
+      return access("/.git", F_OK) == 0;
     }
-    if (last_slash) *last_slash = '\0';
-    else break;
+    
+    if (last_slash) {
+        *last_slash = '\0';
+        // Update length
+        if (path.is_long) path.l.len = last_slash - p;
+        else path.s.len = last_slash - p;
+    } else {
+        break;
+    }
   }
   return false;
 }
@@ -428,12 +439,13 @@ int cmd_selector(int argc, char **argv, const char *tries_path, Mode *mode) {
     zstr_free(&result.path);
     return run_script(zstr_cstr(&script), mode);
   } else if (result.type == ACTION_DELETE) {
-    Z_CLEANUP(zstr_free) zstr script = build_delete_script(tries_path, result.delete_names, result.delete_count);
-    // Free the delete_names array
-    for (size_t i = 0; i < result.delete_count; i++) {
-      free(result.delete_names[i]);
+    Z_CLEANUP(zstr_free) zstr script = build_delete_script(tries_path, &result.delete_names);
+    // Free the delete_names vector
+    zstr *iter;
+    vec_foreach(&result.delete_names, iter) {
+      zstr_free(iter);
     }
-    free(result.delete_names);
+    vec_free_zstr(&result.delete_names);
     zstr_free(&result.path);
     return run_script(zstr_cstr(&script), mode);
   } else {
@@ -456,7 +468,11 @@ int cmd_exec(int argc, char **argv, const char *tries_path, Mode *mode) {
 
   const char *subcmd = argv[0];
 
-  if (strcmp(subcmd, "cd") == 0) {
+  if (strcmp(subcmd, "init") == 0) {
+    // Delegate to init command
+    cmd_init(argc - 1, argv + 1, tries_path);
+    return 0;
+  } else if (strcmp(subcmd, "cd") == 0) {
     // Check if argument is a URL (clone shorthand)
     if (argc > 1 && (strncmp(argv[1], "https://", 8) == 0 ||
                      strncmp(argv[1], "http://", 7) == 0 ||
