@@ -146,11 +146,21 @@ jobs:
     name: Publish to AUR
     needs: release
     runs-on: ubuntu-latest
+    container: archlinux:latest
     environment: OpenSource
 
     steps:
+    - name: Install dependencies
+      run: pacman -Sy --noconfirm git openssh pacman-contrib
+
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Update PKGBUILD version and generate .SRCINFO
+      run: |
+        VERSION=$(cat VERSION | tr -d '\n')
+        sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
+        makepkg --printsrcinfo > .SRCINFO
 
     - name: Publish to AUR
       uses: KSXGitHub/github-actions-deploy-aur@v3.0.1

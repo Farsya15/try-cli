@@ -9,6 +9,7 @@ tui_output.txt
 *.zstd
 pkg/
 dist/
+.SRCINFO
 
 # Object files directory
 obj/
