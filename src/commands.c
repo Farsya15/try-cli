@@ -7,6 +7,7 @@
 #endif
 
 #include "commands.h"
+#include "config.h"
 #include "tui.h"
 #include "utils.h"
 #include <stdio.h>
@@ -467,6 +468,17 @@ int cmd_exec(int argc, char **argv, const char *tries_path, Mode *mode) {
   }
 
   const char *subcmd = argv[0];
+
+  // Handle --version and --help flags (commonly passed through shell wrapper)
+  if (strcmp(subcmd, "--version") == 0 || strcmp(subcmd, "-v") == 0) {
+    printf("try %s\n", TRY_VERSION);
+    return 0;
+  }
+  if (strcmp(subcmd, "--help") == 0 || strcmp(subcmd, "-h") == 0) {
+    // Return non-zero to signal shell wrapper to not eval the help output
+    // (help is printed to stderr by main.c, so we just exit here)
+    return 1;
+  }
 
   if (strcmp(subcmd, "init") == 0) {
     // Delegate to init command
