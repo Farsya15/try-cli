@@ -8,40 +8,107 @@
 #include "commands.h"
 #include "config.h"
 #include "utils.h"
+#include "tui.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Global flag for disabling colors (shared with other modules)
+bool tui_no_colors = false;
 
 // Compact help for direct mode
 static void print_help(void) {
   Z_CLEANUP(zstr_free) zstr default_path = get_default_tries_path();
 
-  Z_CLEANUP(zstr_free) zstr help = zstr_from(
-    "{h1}try{/} v" TRY_VERSION " - ephemeral workspace manager\n\n"
-    "{h1}To use try, add to your shell config:{/}\n\n"
-    "  {bright:blue}# bash/zsh (~/.bashrc or ~/.zshrc){/}\n"
-    "  eval \"$(try init ~/src/tries)\"\n\n"
-    "  {bright:blue}# fish (~/.config/fish/config.fish){/}\n"
-    "  eval (try init ~/src/tries | string collect)\n\n"
-    "{h1}Commands:{/}\n"
-    "  {b}try{/} [query|url]      {dim}Interactive selector, or clone if URL{/}\n"
-    "  {b}try clone{/} <url>      {dim}Clone repo into dated directory{/}\n"
-    "  {b}try worktree{/} <name>  {dim}Create worktree from current git repo{/}\n"
-    "  {b}try exec{/} [query]     {dim}Output shell script (for manual eval){/}\n"
-    "  {b}try --help{/}           {dim}Show this help{/}\n\n"
-    "{h1}Defaults:{/}\n"
-    "  Path: {b}~/src/tries{/} (override with {b}--path{/} on init)\n"
-    "  Current: {b}");
-  zstr_cat(&help, zstr_cstr(&default_path));
-  zstr_cat(&help, "{/}\n\n"
-    "{h1}Examples:{/}\n"
-    "  try clone https://github.com/user/repo.git       {bright:blue}# YYYY-MM-DD-user-repo{/}\n"
-    "  try clone https://github.com/user/repo.git foo   {bright:blue}# YYYY-MM-DD-foo{/}\n"
-    "  try https://github.com/user/repo.git             {bright:blue}# shorthand for clone{/}\n"
-    "  try ./my-project worktree feature                {bright:blue}# YYYY-MM-DD-feature{/}\n");
+  Z_CLEANUP(zstr_free) zstr help = zstr_init();
 
-  Z_CLEANUP(zstr_free) zstr expanded = zstr_expand_tokens(zstr_cstr(&help));
-  fprintf(stderr, "%s", zstr_cstr(&expanded));
+  // Title
+  tui_zstr_printf(&help, TUI_H1, "try");
+  zstr_cat(&help, " v" TRY_VERSION " - ephemeral workspace manager\n\n");
+
+  // Setup section
+  tui_zstr_printf(&help, TUI_H1, "To use try, add to your shell config:");
+  zstr_cat(&help, "\n\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# bash/zsh (~/.bashrc or ~/.zshrc)");
+  zstr_cat(&help, "\n");
+  zstr_cat(&help, "  eval \"$(try init ~/src/tries)\"\n\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# fish (~/.config/fish/config.fish)");
+  zstr_cat(&help, "\n");
+  zstr_cat(&help, "  eval (try init ~/src/tries | string collect)\n\n");
+
+  // Commands section
+  tui_zstr_printf(&help, TUI_H1, "Commands:");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, TUI_BOLD, "try");
+  zstr_cat(&help, " [query|url]      ");
+  tui_zstr_printf(&help, TUI_DIM, "Interactive selector, or clone if URL");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, TUI_BOLD, "try clone");
+  zstr_cat(&help, " <url>      ");
+  tui_zstr_printf(&help, TUI_DIM, "Clone repo into dated directory");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, TUI_BOLD, "try worktree");
+  zstr_cat(&help, " <name>  ");
+  tui_zstr_printf(&help, TUI_DIM, "Create worktree from current git repo");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, TUI_BOLD, "try exec");
+  zstr_cat(&help, " [query]     ");
+  tui_zstr_printf(&help, TUI_DIM, "Output shell script (for manual eval)");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, TUI_BOLD, "try --help");
+  zstr_cat(&help, "           ");
+  tui_zstr_printf(&help, TUI_DIM, "Show this help");
+  zstr_cat(&help, "\n\n");
+
+  // Defaults section
+  tui_zstr_printf(&help, TUI_H1, "Defaults:");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  Path: ");
+  tui_zstr_printf(&help, TUI_BOLD, "~/src/tries");
+  zstr_cat(&help, " (override with ");
+  tui_zstr_printf(&help, TUI_BOLD, "--path");
+  zstr_cat(&help, " on init)\n");
+
+  zstr_cat(&help, "  Current: ");
+  tui_zstr_printf(&help, TUI_BOLD, zstr_cstr(&default_path));
+  zstr_cat(&help, "\n\n");
+
+  // Examples section
+  tui_zstr_printf(&help, TUI_H1, "Examples:");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  try clone https://github.com/user/repo.git       ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# YYYY-MM-DD-user-repo");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  try clone https://github.com/user/repo.git foo   ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# YYYY-MM-DD-foo");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  try https://github.com/user/repo.git             ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# shorthand for clone");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  try ./my-project worktree feature                ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# YYYY-MM-DD-feature");
+  zstr_cat(&help, "\n");
+
+  fprintf(stderr, "%s", zstr_cstr(&help));
 }
 
 // Parse a --flag=value or --flag value option, returns value or NULL
@@ -71,11 +138,12 @@ int main(int argc, char **argv) {
 
   // Check NO_COLOR environment variable (https://no-color.org/)
   if (getenv("NO_COLOR") != NULL) {
-    zstr_no_colors = true;
+    tui_no_colors = true;
   }
 
-  // Mode configuration
-  Mode mode = {.type = MODE_DIRECT};
+  // Testing parameters (only used for automated tests)
+  TestParams test = {0};
+  bool exec_mode = false;
 
   // Parse arguments - options can appear anywhere
   for (int i = 1; i < argc; i++) {
@@ -94,15 +162,11 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (strcmp(arg, "--no-colors") == 0) {
-      zstr_no_colors = true;
-      continue;
-    }
-    if (strcmp(arg, "--no-expand-tokens") == 0) {
-      zstr_disable_token_expansion = true;
+      tui_no_colors = true;
       continue;
     }
     if (strcmp(arg, "--and-exit") == 0) {
-      mode.render_once = true;
+      test.render_once = true;
       continue;
     }
 
@@ -114,7 +178,7 @@ int main(int argc, char **argv) {
       continue;
     }
     if ((value = parse_option_value(arg, next, "--and-keys", &skip))) {
-      mode.inject_keys = value;
+      test.inject_keys = value;
       i += skip;
       continue;
     }
@@ -156,23 +220,48 @@ int main(int argc, char **argv) {
     cmd_init((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr);
     return 0;
   } else if (strcmp(command, "exec") == 0) {
-    // Exec mode
-    mode.type = MODE_EXEC;
-    return cmd_exec((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
+    // Exec mode - route subcommand and print script
+    exec_mode = true;
+    Z_CLEANUP(zstr_free) zstr script = cmd_route(
+        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &test);
+    if (zstr_is_empty(&script)) {
+      return 1; // Error or special case (like init)
+    }
+    return run_script(zstr_cstr(&script), exec_mode);
   } else if (strcmp(command, "cd") == 0) {
     // Direct mode cd (interactive selector)
-    return cmd_selector((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
+    Z_CLEANUP(zstr_free) zstr script = cmd_selector(
+        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &test);
+    if (zstr_is_empty(&script)) {
+      return 1;
+    }
+    return run_script(zstr_cstr(&script), exec_mode);
   } else if (strcmp(command, "clone") == 0) {
     // Direct mode clone
-    return cmd_clone((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
+    Z_CLEANUP(zstr_free) zstr script = cmd_clone(
+        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr);
+    if (zstr_is_empty(&script)) {
+      return 1;
+    }
+    return run_script(zstr_cstr(&script), exec_mode);
   } else if (strcmp(command, "worktree") == 0) {
     // Direct mode worktree
-    return cmd_worktree((int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &mode);
+    Z_CLEANUP(zstr_free) zstr script = cmd_worktree(
+        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr);
+    if (zstr_is_empty(&script)) {
+      return 1;
+    }
+    return run_script(zstr_cstr(&script), exec_mode);
   } else if (strncmp(command, "https://", 8) == 0 ||
              strncmp(command, "http://", 7) == 0 ||
              strncmp(command, "git@", 4) == 0) {
     // URL shorthand for clone: try <url> = try clone <url>
-    return cmd_clone((int)cmd_args.length, cmd_args.data, path_cstr, &mode);
+    Z_CLEANUP(zstr_free) zstr script = cmd_clone(
+        (int)cmd_args.length, cmd_args.data, path_cstr);
+    if (zstr_is_empty(&script)) {
+      return 1;
+    }
+    return run_script(zstr_cstr(&script), exec_mode);
   } else {
     // Unknown command - show help
     fprintf(stderr, "Unknown command: %s\n\n", command);
