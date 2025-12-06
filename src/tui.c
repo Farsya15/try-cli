@@ -636,8 +636,8 @@ SelectionResult run_selector(const char *base_path,
 
   bool is_test = (test && (test->render_once || test->inject_keys));
 
-  // Test mode: render once and exit
-  if (is_test && test->render_once) {
+  // Test mode: render once and exit (only if no keys to inject)
+  if (is_test && test->render_once && !test->inject_keys) {
     render(base_path);
     SelectionResult result = {.type = ACTION_CANCEL, .path = zstr_init()};
     return result;
@@ -678,8 +678,14 @@ SelectionResult run_selector(const char *base_path,
       // get_window_size() is called in render() to get updated size
       continue;
     }
-    if (c == -1)
+    if (c == -1) {
+      // End of input (or end of test keys)
+      // If we were in render-once mode with keys, render final state now
+      if (is_test && test->render_once) {
+        render(base_path);
+      }
       break;
+    }
 
     if (c == ESC_KEY || c == 3) {
       // If in delete mode, just clear marks and continue

@@ -309,16 +309,12 @@ int get_window_size(int *rows, int *cols) {
   // Check TRY_WIDTH/TRY_HEIGHT env vars first (for testing)
   const char *env_width = getenv("TRY_WIDTH");
   const char *env_height = getenv("TRY_HEIGHT");
-  if (env_width && env_height) {
-    *cols = atoi(env_width);
-    *rows = atoi(env_height);
+  
+  if (env_width || env_height) {
+    *cols = env_width ? atoi(env_width) : 80;
+    *rows = env_height ? atoi(env_height) : 24;
+    
     if (*cols > 0 && *rows > 0) {
-      goto cache_and_return;
-    }
-  } else if (env_width) {
-    *cols = atoi(env_width);
-    if (*cols > 0) {
-      *rows = 24;  // Default height
       goto cache_and_return;
     }
   }

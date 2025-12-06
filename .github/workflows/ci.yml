@@ -19,11 +19,7 @@ jobs:
     - name: Install Nix
       uses: DeterminateSystems/determinate-nix-action@v3
 
-    - name: Setup Nix Cache
-      uses: DeterminateSystems/flakehub-cache-action@main
-      with:
-        cache-name: try-cli-test
-        cache-priming: true
+
 
     # - name: Build
     #   run: nix build .#packages.x86_64-linux.default
@@ -47,12 +43,6 @@ jobs:
 
     - name: Install Nix
       uses: DeterminateSystems/determinate-nix-action@v3
-
-    - name: Setup Nix Cache
-      uses: DeterminateSystems/flakehub-cache-action@main
-      with:
-        cache-name: try-cli-test
-        cache-priming: true
 
     - name: Build cross-compiled binary
       run: nix build .#packages.x86_64-linux.${{ matrix.target }}

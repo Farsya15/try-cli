@@ -345,7 +345,7 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
 
   // Get the path to this executable using realpath for absolute path
   char exe_path[1024];
-  char resolved_path[1024];
+  char *resolved_path = NULL;
   bool got_path = false;
 
   // Try /proc/self/exe first (Linux)
@@ -366,7 +366,11 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
 
   // Resolve to absolute path, handling symlinks
   const char *self_path;
-  if (got_path && realpath(exe_path, resolved_path) != NULL) {
+  if (got_path) {
+    resolved_path = realpath(exe_path, NULL);
+  }
+
+  if (resolved_path) {
     self_path = resolved_path;
   } else {
     // Fallback: use "command try" to bypass function shadowing
@@ -398,6 +402,10 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
       "  eval \"$out\"\n"
       "}\n",
       zstr_cstr(&escaped_self), zstr_cstr(&escaped_tries));
+  }
+
+  if (resolved_path) {
+    free(resolved_path);
   }
 }
 
